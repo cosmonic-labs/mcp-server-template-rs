@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: wasm32-wasip2
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Build component
+        run: cargo build --release
+
+      - name: Verify wasi:http@0.3.0 handler export
+        run: |
+          cargo install wasm-tools --locked
+          wasm-tools component wit target/wasm32-wasip2/release/mcp_server_template.wasm | tee /tmp/world.wit
+          grep -q 'export wasi:http/handler@0.3.0' /tmp/world.wit
+
+      - name: Smoke test under wasmtime
+        run: |
+          curl -sSfL https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-x86_64-linux.tar.xz | tar -xJ
+          ./wasmtime-v46.0.1-x86_64-linux/wasmtime serve -Sp3,cli --addr 127.0.0.1:8123 \
+            target/wasm32-wasip2/release/mcp_server_template.wasm &
+          sleep 2
+          RESPONSE=$(curl -sS -X POST http://127.0.0.1:8123/ \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -H 'MCP-Protocol-Version: 2026-07-28' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}')
+          echo "$RESPONSE"
+          echo "$RESPONSE" | grep -q '"protocolVersion":"2026-07-28"'

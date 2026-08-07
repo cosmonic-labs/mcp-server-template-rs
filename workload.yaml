@@ -1,0 +1,35 @@
+# Cosmonic Desktop / wasmCloud v2 Workload manifest for this MCP server.
+#
+# Replace `image` with the digest-pinned reference returned by promote
+# (`cosmonic_promote` or the Cosmonic Desktop UI), then apply with
+# `cosmonic_apply_workload` or POST /v1/workloads.
+#
+# The wasi:http hostInterface routes ingress traffic to this workload by HTTP
+# Host header. Note `interfaces: ["handler"]` — the WASI p3 (wasi:http@0.3.0)
+# handler export, not the p2 `incoming-handler`.
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: mcp-server
+  namespace: default
+spec:
+  hostInterfaces:
+    - namespace: wasi
+      package: http
+      interfaces: ["handler"]
+      config:
+        host: mcp-server.localhost
+  components:
+    - name: mcp
+      image: oci-registry.localhost:8200/mcp-server-template:0.1.0
+      poolSize: 1
+      localResources:
+        environment:
+          config:
+            RUST_LOG: info
+            # Optional DNS-rebinding guard: comma-separated exact host[:port]
+            # values the transport will accept in the Host header. Unset =
+            # disabled (Cosmonic's ingress already routes by exact Host).
+            # MCP_ALLOWED_HOSTS: "mcp-server.localhost"
+        # Outbound allow-list — empty means deny-all (fail-closed).
+        allowedHosts: []

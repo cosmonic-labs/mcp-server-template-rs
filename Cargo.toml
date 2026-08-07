@@ -1,0 +1,54 @@
+[package]
+name = "mcp-server-template"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+description = "Template for building MCP servers as WebAssembly components (wasi:http@0.3.0 / WASI p3)"
+license = "Apache-2.0"
+repository = "https://github.com/cosmonic-labs/mcp-server-template-rs"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Official Model Context Protocol SDK. The streamable-http-server transport is
+# pure `http`/`http-body` types (no hyper/axum), so it compiles to wasm32-wasip2.
+rmcp = { version = "3.1.1", default-features = false, features = [
+    "server",
+    "macros",
+    "schemars",
+    "transport-streamable-http-server",
+] }
+
+# WASI 0.3 bindings: exports the `wasi:http@0.3.0` service world and bridges
+# to hyperium `http` types via `http_compat`.
+wasip3 = { version = "0.7.0", features = ["http-compat"] }
+
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+
+# rmcp drives its session/dispatch machinery with tokio primitives; on
+# wasm32-wasip2 we run a single-threaded runtime. `net` is enabled (with the
+# `tokio_unstable` cfg from .cargo/config.toml) so tools can open outbound
+# TCP connections if they need to.
+tokio = { version = "1.50", features = ["rt", "macros", "sync", "time", "io-util", "net"] }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# Observability: structured JSON logs on stderr. The wasmCloud / Cosmonic host
+# captures stderr and exports it as OTLP log records when OTEL is enabled.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "fmt",
+    "env-filter",
+    "json",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
