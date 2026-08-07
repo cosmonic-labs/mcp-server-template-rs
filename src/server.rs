@@ -34,6 +34,16 @@ pub struct AddParams {
     pub b: f64,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HttpGetParams {
+    /// URL to fetch. Its host must be on the workload's outbound
+    /// `allowedHosts` allow-list (deny-all by default).
+    pub url: String,
+}
+
+/// Response bodies larger than this are truncated in `http_get` output.
+const HTTP_GET_BODY_LIMIT: usize = 4096;
+
 #[tool_router]
 impl TemplateServer {
     pub fn new() -> Self {
@@ -68,6 +78,40 @@ impl TemplateServer {
         ))
     }
 
+    /// Example tool: outbound HTTP through the `wasi:http@0.3.0` client
+    /// bindings (see [`crate::bridge::outbound`]). The workload's
+    /// `allowedHosts` policy governs which hosts are reachable.
+    #[tool(
+        description = "HTTP GET a URL (host must be on the workload's outbound allow-list); \
+                          returns the status line and up to 4 KiB of the body"
+    )]
+    #[tracing::instrument(name = "tool.http_get", skip(self))]
+    async fn http_get(
+        &self,
+        Parameters(params): Parameters<HttpGetParams>,
+    ) -> Result<CallToolResult, ErrorData> {
+        let request = http::Request::get(&params.url)
+            .body(bytes::Bytes::new())
+            .map_err(|err| ErrorData::invalid_params(err.to_string(), None))?;
+        match crate::bridge::outbound::fetch(request).await {
+            Ok(response) => {
+                let status = response.status();
+                let mut body = String::from_utf8_lossy(response.body()).into_owned();
+                if body.len() > HTTP_GET_BODY_LIMIT {
+                    body.truncate(HTTP_GET_BODY_LIMIT);
+                    body.push_str("…[truncated]");
+                }
+                Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                    "HTTP {status}\n{body}"
+                ))]))
+            }
+            // Tool-level error: the caller should see why the fetch failed.
+            Err(err) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                "fetch failed: {err}"
+            ))])),
+        }
+    }
+
     /// Example tool: reports the current wall-clock time from the WASI host.
     #[tool(description = "Get the current UTC time as a unix timestamp in milliseconds")]
     #[tracing::instrument(name = "tool.current_time", skip(self))]
@@ -92,7 +136,8 @@ impl ServerHandler for TemplateServer {
             .with_instructions(
                 "Template MCP server running as a WebAssembly component on \
                  Cosmonic Desktop. Use `echo`, `add`, or `current_time` to \
-                 verify connectivity, then replace them with your own tools.",
+                 verify connectivity, `http_get` to test outbound HTTP, then \
+                 replace them with your own tools.",
             )
     }
 }

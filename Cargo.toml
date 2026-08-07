@@ -38,6 +38,7 @@ tokio = { version = "1.50", features = ["rt", "macros", "sync", "time", "io-util
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
+thiserror = "2"
 
 # Observability: structured JSON logs on stderr. The wasmCloud / Cosmonic host
 # captures stderr and exports it as OTLP log records when OTEL is enabled.
@@ -46,7 +47,28 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
     "fmt",
     "env-filter",
     "json",
+    "registry",
 ] }
+
+# Optional native wasi:otel support (`--features wasi-otel`): guest spans are
+# reported to the host via the wasi:otel@0.2.0-rc.2 interfaces and join the
+# host's traces. Requires a host that implements wasi:otel (wasmCloud v2 /
+# Cosmonic Control); plain `wasmtime serve` does not.
+opentelemetry = { version = "0.31", optional = true }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = [
+    "trace",
+], optional = true }
+opentelemetry-wasi = { git = "https://github.com/bytecodealliance/opentelemetry-wasi", rev = "2962a286aa66", optional = true }
+tracing-opentelemetry = { version = "0.32", default-features = false, optional = true }
+
+[features]
+default = []
+wasi-otel = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-wasi",
+    "dep:tracing-opentelemetry",
+]
 
 [profile.release]
 opt-level = "s"
