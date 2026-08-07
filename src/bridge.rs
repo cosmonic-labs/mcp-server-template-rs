@@ -53,6 +53,25 @@ fn with_job_receiver<T>(f: impl FnOnce(&mut mpsc::UnboundedReceiver<Job>) -> T) 
     f(&mut guard)
 }
 
+/// Discards outbound jobs queued by a previous exchange that ended before
+/// they were serviced (e.g. the peer dropped the response stream mid-body and
+/// the pump returned early). Dropping the reply sender resolves the stale
+/// tool's `fetch` with [`outbound::Error::BridgeClosed`].
+pub fn drain_stale_jobs() {
+    with_job_receiver(|rx| {
+        let mut dropped = 0usize;
+        while rx.try_recv().is_ok() {
+            dropped += 1;
+        }
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                "discarded stale outbound jobs from a previous exchange"
+            );
+        }
+    });
+}
+
 /// Serializes MCP exchanges within one component instance. The bridge drives
 /// one tokio-world computation at a time; concurrent scaling comes from the
 /// host running more instances (`poolSize`), not intra-instance concurrency.
@@ -73,7 +92,6 @@ pub fn runtime() -> &'static tokio::runtime::Runtime {
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_current_thread()
             .enable_time()
-            .enable_io()
             .build()
             .expect("failed to build single-threaded tokio runtime")
     })
@@ -115,6 +133,35 @@ async fn poll_next_job() -> Job {
         .expect("job queue sender side is static and never closes")
 }
 
+/// The deadline elapsed before the raced future completed.
+#[derive(Debug)]
+pub struct TimedOut;
+
+/// Races a future against a `wasi:clocks` monotonic deadline.
+///
+/// For **component-model context only** (the pump, `outbound::perform`) —
+/// tokio-world futures get their timeouts from `tokio::time` inside the
+/// runtime instead. Without deadlines here, a peer that stalls (an upstream
+/// that never responds, a client that stops reading its response stream)
+/// would park the instance forever while it holds the request lock.
+pub async fn timeout<F: Future>(millis: u64, future: F) -> Result<F::Output, TimedOut> {
+    use std::task::Poll;
+    let mut future = pin!(future);
+    let mut deadline = pin!(wasip3::clocks::monotonic_clock::wait_for(
+        millis.saturating_mul(1_000_000)
+    ));
+    std::future::poll_fn(|cx| {
+        if let Poll::Ready(value) = future.as_mut().poll(cx) {
+            return Poll::Ready(Ok(value));
+        }
+        if deadline.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(TimedOut));
+        }
+        Poll::Pending
+    })
+    .await
+}
+
 pub mod outbound {
     //! Outbound HTTP for tool code, backed directly by the `wasi:http@0.3.0`
     //! client bindings (per-workload `allowedHosts` policy applies).
@@ -127,8 +174,17 @@ pub mod outbound {
     //! ```
 
     use bytes::Bytes;
-    use http_body_util::{BodyExt, Full};
+    use http_body_util::{BodyExt as _, Full};
     use wasip3::http_compat::{http_from_wasi_response, http_into_wasi_request};
+
+    /// Upper bound on a buffered outbound response body.
+    const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+    /// Deadline for one outbound exchange (connect through body read),
+    /// overridable with `MCP_OUTBOUND_TIMEOUT_MS`. Without it, an upstream
+    /// that accepts the connection and never responds would wedge the
+    /// instance (the tokio world is frozen while the bridge performs I/O).
+    const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
     /// Errors surfaced to tool code for a failed outbound exchange.
     #[derive(Debug, thiserror::Error)]
@@ -137,6 +193,12 @@ pub mod outbound {
         /// e.g. a host missing from the workload's `allowedHosts` — etc.).
         #[error("wasi:http error: {0}")]
         Wasi(String),
+        /// The exchange did not complete within the outbound deadline.
+        #[error("outbound request timed out after {0} ms")]
+        TimedOut(u64),
+        /// The response body exceeded [`MAX_RESPONSE_BYTES`].
+        #[error("response body larger than {MAX_RESPONSE_BYTES} bytes")]
+        ResponseTooLarge,
         /// The bridge driver went away before replying (component teardown).
         #[error("outbound bridge unavailable")]
         BridgeClosed,
@@ -165,15 +227,29 @@ pub mod outbound {
     pub(super) async fn perform(
         request: http::Request<Bytes>,
     ) -> Result<http::Response<Bytes>, Error> {
-        let wasi_request = http_into_wasi_request(request.map(Full::new))?;
-        let wasi_response = wasip3::http::client::send(wasi_request).await?;
-        let response = http_from_wasi_response(wasi_response)?;
-        let (parts, body) = response.into_parts();
-        let bytes = body
-            .collect()
-            .await
-            .map_err(|err| Error::Wasi(err.to_string()))?
-            .to_bytes();
-        Ok(http::Response::from_parts(parts, bytes))
+        let timeout_ms = std::env::var("MCP_OUTBOUND_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_TIMEOUT_MS);
+        super::timeout(timeout_ms, async move {
+            let wasi_request = http_into_wasi_request(request.map(Full::new))?;
+            let wasi_response = wasip3::http::client::send(wasi_request).await?;
+            let response = http_from_wasi_response(wasi_response)?;
+            let (parts, body) = response.into_parts();
+            let bytes = http_body_util::Limited::new(body, MAX_RESPONSE_BYTES)
+                .collect()
+                .await
+                .map_err(|err| {
+                    if err.is::<http_body_util::LengthLimitError>() {
+                        Error::ResponseTooLarge
+                    } else {
+                        Error::Wasi(err.to_string())
+                    }
+                })?
+                .to_bytes();
+            Ok(http::Response::from_parts(parts, bytes))
+        })
+        .await
+        .unwrap_or(Err(Error::TimedOut(timeout_ms)))
     }
 }

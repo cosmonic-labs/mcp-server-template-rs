@@ -42,9 +42,11 @@ spec:
         environment:
           config:
             RUST_LOG: info
-            # Optional DNS-rebinding guard: comma-separated exact host[:port]
-            # values the transport will accept in the Host header. Unset =
-            # disabled (Cosmonic's ingress already routes by exact Host).
-            # MCP_ALLOWED_HOSTS: "mcp-server.localhost"
+            # DNS-rebinding guard: hosts the transport accepts in the Host
+            # header (`host` matches any port; `host:port` is exact; `*`
+            # disables the guard). Unset, only localhost/127.0.0.1/::1 are
+            # accepted — Cosmonic routes to this workload by Host header, so
+            # this must match the hostInterface `host` above.
+            MCP_ALLOWED_HOSTS: "mcp-server.localhost"
         # Outbound allow-list — empty means deny-all (fail-closed).
         allowedHosts: []

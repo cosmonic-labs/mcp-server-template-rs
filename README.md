@@ -63,8 +63,15 @@ promote and apply `workload.yaml` with the digest-pinned image ref from
 promote. Or with wasmtime:
 
 ```console
-$ wasmtime serve -Sp3,cli,http target/wasm32-wasip2/release/mcp_server_template.wasm
+$ wasmtime serve -Sp3,cli,http --addr 127.0.0.1:8080 \
+    target/wasm32-wasip2/release/mcp_server_template.wasm
 ```
+
+Always pass `--addr 127.0.0.1:…` — wasmtime's default is `0.0.0.0`, which
+exposes the server to your whole network. Note that `-Shttp` enables
+*unfiltered* outbound HTTP (no `allowedHosts` policy exists under plain
+wasmtime); the in-guest guard on `http_get` refuses local/private targets
+unless `MCP_HTTP_GET_ALLOW_LOCAL=true` is set.
 
 ### Talk to it
 
@@ -88,11 +95,15 @@ $ curl -X POST http://mcp-server.localhost:8200/ \
     -H 'MCP-Protocol-Version: 2026-07-28' \
     -H 'Mcp-Method: tools/call' -H 'Mcp-Name: add' \
     -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"add","arguments":{"a":1.5,"b":2.5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
-{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"{\"sum\":4.0}"}],"structuredContent":{"sum":4.0},"isError":false}}
+data: {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"{\"sum\":4.0}"}],"structuredContent":{"sum":4.0},"isError":false}}
 ```
 
-Any MCP client that speaks streamable HTTP works too (they send these
-headers for you).
+Responses arrive SSE-framed (`Content-Type: text/event-stream`, `data:`
+lines) — the transport's default, which lets long-running tools stream
+progress. Any MCP client that speaks streamable HTTP handles this (and the
+headers above) for you. Only POST is served: GET/DELETE return 405, and there
+are deliberately no CORS headers — browser pages cannot call the server
+cross-origin, which is part of the DNS-rebinding defense.
 
 ## Writing your own tools
 
@@ -156,12 +167,24 @@ owns OTLP export; the component emits structured, correlatable signals.**
   fails to link on Cosmonic Desktop 0.5.18 until the two align. Keep it off
   for `wasmtime serve` (no wasi:otel host support there).
 
+## Testing
+
+`scripts/e2e.sh` builds the component and runs the full protocol suite
+against it under `wasmtime serve` — spec conformance, streaming, the outbound
+bridge (against a local fixture server, including a black-holed upstream),
+the Host-header guard, the SSRF guard, oversized bodies, and concurrency. CI
+runs it on every push. Note that `.cargo/config.toml` defaults the build
+target to wasm32-wasip2, so plain `cargo test` would build (unrunnable) wasm
+test binaries — the e2e harness is the test entry point.
+
 ## Configuration
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `RUST_LOG` | `info` | Log filter (`tracing_subscriber::EnvFilter` syntax) |
-| `MCP_ALLOWED_HOSTS` | unset (guard off) | Comma-separated exact `host[:port]` values accepted in the `Host` header (DNS-rebinding guard). Leave unset behind Host-routed ingress; set it when exposing the server on a routable origin. |
+| `RUST_LOG` | `info` | Log filter (`tracing_subscriber::EnvFilter` syntax). Avoid `trace` in production: rmcp logs full request payloads at trace level. |
+| `MCP_ALLOWED_HOSTS` | unset → localhost only | DNS-rebinding guard: comma-separated `Host` values to accept (`host` matches any port, `host:port` is exact, `*` disables the guard). Unset keeps rmcp's safe default (localhost/127.0.0.1/::1). **Deployments reached under another name must set this** — e.g. `mcp-server.localhost` on Cosmonic Desktop, as `workload.yaml` does. |
+| `MCP_HTTP_GET_ALLOW_LOCAL` | unset (deny) | Lets the `http_get` example tool target loopback/private/link-local addresses (development only). |
+| `MCP_OUTBOUND_TIMEOUT_MS` | `30000` | Deadline for one outbound `bridge::outbound::fetch` exchange. |
 
 ## License
 

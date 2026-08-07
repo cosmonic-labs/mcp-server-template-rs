@@ -37,16 +37,10 @@ jobs:
           wasm-tools component wit target/wasm32-wasip2/release/mcp_server_template.wasm | tee /tmp/world.wit
           grep -q 'export wasi:http/handler@0.3.0' /tmp/world.wit
 
-      - name: Smoke test under wasmtime
+      - name: End-to-end protocol suite
         run: |
           curl -sSfL https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-x86_64-linux.tar.xz | tar -xJ
-          ./wasmtime-v46.0.1-x86_64-linux/wasmtime serve -Sp3,cli,http --addr 127.0.0.1:8123 \
-            target/wasm32-wasip2/release/mcp_server_template.wasm &
-          sleep 2
-          RESPONSE=$(curl -sS -X POST http://127.0.0.1:8123/ \
-            -H 'Content-Type: application/json' \
-            -H 'Accept: application/json, text/event-stream' \
-            -H 'MCP-Protocol-Version: 2026-07-28' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}')
-          echo "$RESPONSE"
-          echo "$RESPONSE" | grep -q '"protocolVersion":"2026-07-28"'
+          echo "$PWD/wasmtime-v46.0.1-x86_64-linux" >> "$GITHUB_PATH"
+          export PATH="$PWD/wasmtime-v46.0.1-x86_64-linux:$PATH"
+          cargo install wasm-tools --locked || true
+          scripts/e2e.sh --no-build

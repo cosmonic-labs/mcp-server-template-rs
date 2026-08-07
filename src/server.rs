@@ -79,10 +79,17 @@ impl TemplateServer {
     }
 
     /// Example tool: outbound HTTP through the `wasi:http@0.3.0` client
-    /// bindings (see [`crate::bridge::outbound`]). The workload's
-    /// `allowedHosts` policy governs which hosts are reachable.
+    /// bindings (see [`crate::bridge::outbound`]).
+    ///
+    /// Two layers of policy apply: on wasmCloud/Cosmonic the workload's
+    /// `allowedHosts` list is enforced by the host (deny-all by default), and
+    /// [`deny_private_target`] refuses loopback/private/link-local targets
+    /// in-guest as defense in depth — runtimes like `wasmtime serve -Shttp`
+    /// apply no outbound filtering at all, and without this check any client
+    /// could probe internal services through the tool (SSRF). Set
+    /// `MCP_HTTP_GET_ALLOW_LOCAL=true` to permit local targets (development).
     #[tool(
-        description = "HTTP GET a URL (host must be on the workload's outbound allow-list); \
+        description = "HTTP GET a URL (subject to the outbound allow-list policy); \
                           returns the status line and up to 4 KiB of the body"
     )]
     #[tracing::instrument(name = "tool.http_get", skip(self))]
@@ -93,12 +100,15 @@ impl TemplateServer {
         let request = http::Request::get(&params.url)
             .body(bytes::Bytes::new())
             .map_err(|err| ErrorData::invalid_params(err.to_string(), None))?;
+        if let Some(reason) = deny_private_target(request.uri()) {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(reason)]));
+        }
         match crate::bridge::outbound::fetch(request).await {
             Ok(response) => {
                 let status = response.status();
                 let mut body = String::from_utf8_lossy(response.body()).into_owned();
                 if body.len() > HTTP_GET_BODY_LIMIT {
-                    body.truncate(HTTP_GET_BODY_LIMIT);
+                    body.truncate(truncation_boundary(&body, HTTP_GET_BODY_LIMIT));
                     body.push_str("…[truncated]");
                 }
                 Ok(CallToolResult::success(vec![ContentBlock::text(format!(
@@ -123,6 +133,68 @@ impl TemplateServer {
             now.as_millis().to_string(),
         )]))
     }
+}
+
+/// Largest index `<= limit` that falls on a UTF-8 character boundary of `s`.
+///
+/// `String::truncate` panics on a non-boundary index, and any multibyte body
+/// longer than the limit would hit one.
+fn truncation_boundary(s: &str, limit: usize) -> usize {
+    let mut index = limit.min(s.len());
+    while !s.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
+}
+
+/// In-guest SSRF guard for [`TemplateServer::http_get`]: refuses URLs whose
+/// scheme is not http(s) or whose host is loopback, private-range,
+/// link-local, or `*.localhost`.
+///
+/// This is defense in depth for hosts without outbound filtering (`wasmtime
+/// serve -Shttp`); on wasmCloud/Cosmonic the workload `allowedHosts` policy
+/// is the authoritative control (a DNS name resolving to a private address is
+/// only visible host-side). Returns the denial reason, or `None` if allowed.
+/// Opt out for local development with `MCP_HTTP_GET_ALLOW_LOCAL=true`.
+fn deny_private_target(uri: &http::Uri) -> Option<String> {
+    match uri.scheme_str() {
+        Some("http") | Some("https") => {}
+        other => {
+            return Some(format!(
+                "denied: scheme {:?} is not allowed (use http or https)",
+                other.unwrap_or("none")
+            ));
+        }
+    }
+
+    if std::env::var("MCP_HTTP_GET_ALLOW_LOCAL").is_ok_and(|v| v == "true" || v == "1") {
+        return None;
+    }
+
+    let host = uri.host().unwrap_or_default().trim_matches(['[', ']']);
+    let local = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        match ip {
+            std::net::IpAddr::V4(v4) => {
+                v4.is_loopback()
+                    || v4.is_private()
+                    || v4.is_link_local()
+                    || v4.is_unspecified()
+                    || v4.is_broadcast()
+            }
+            std::net::IpAddr::V6(v6) => {
+                v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_unique_local()
+                    || v6.is_unicast_link_local()
+            }
+        }
+    } else {
+        host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost")
+    };
+
+    local.then(|| {
+        format!("denied: {host} is a local/private target (set MCP_HTTP_GET_ALLOW_LOCAL=true to permit in development)")
+    })
 }
 
 #[tool_handler(router = self.tool_router)]
