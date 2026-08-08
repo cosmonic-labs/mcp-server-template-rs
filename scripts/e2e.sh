@@ -81,7 +81,9 @@ fi
 # upstream, exercised by the outbound-timeout test).
 python3 - "$FIXTURE_PORT" <<'EOF' >/dev/null 2>&1 &
 import sys, time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+# ThreadingHTTPServer: the concurrent-outbound test fires 8 requests at once,
+# so the fixture must handle concurrent connections or those requests fail.
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -99,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-HTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
 EOF
 FIXTURE_PID=$!
 
@@ -206,6 +208,28 @@ if [ "$CONCURRENT_FAILS" -eq 0 ]; then
   pass "8 concurrent tool calls all succeed"
 else
   fail "8 concurrent tool calls all succeed" "$CONCURRENT_FAILS of 8 failed"
+fi
+
+# Regression: concurrent OUTBOUND calls on one reused instance park tasks on
+# Rust-only events (request lock, outbound oneshot). Without wit-bindgen's
+# `inter-task-wakeup` feature the component-model executor traps
+# ("Rust task cannot sleep waiting only on Rust-originating events"). This must
+# stay green — it exercises the whole bridge under concurrency.
+OUTBOUND_FAILS=0
+OB_PIDS=()
+for i in $(seq 1 8); do
+  (printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":$i,\"method\":\"tools/call\",\"params\":{\"name\":\"http_get\",\"arguments\":{\"url\":\"http://127.0.0.1:${FIXTURE_PORT}/hello.txt\"},$META}}" \
+    | mcp_post -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' > "/tmp/mcp-e2e-ob-$i.json") &
+  OB_PIDS+=($!)
+done
+wait "${OB_PIDS[@]}"
+for i in $(seq 1 8); do
+  grep -q 'hello from fixture' "/tmp/mcp-e2e-ob-$i.json" || OUTBOUND_FAILS=$((OUTBOUND_FAILS + 1))
+done
+if [ "$OUTBOUND_FAILS" -eq 0 ]; then
+  pass "8 concurrent outbound calls all succeed (inter-task-wakeup)"
+else
+  fail "8 concurrent outbound calls all succeed (inter-task-wakeup)" "$OUTBOUND_FAILS of 8 failed"
 fi
 
 echo "== Host-header guard (MCP_ALLOWED_HOSTS) =="

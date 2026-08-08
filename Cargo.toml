@@ -24,6 +24,19 @@ rmcp = { version = "3.1.1", default-features = false, features = [
 # to hyperium `http` types via `http_compat`.
 wasip3 = { version = "0.7.0", features = ["http-compat"] }
 
+# The bridge parks tasks on Rust-only events (the request-lock mutex, the
+# outbound-reply oneshot). Under concurrent same-instance invocation the
+# component-model executor must be able to wake one task from another's action,
+# which requires wit-bindgen's `inter-task-wakeup` feature. wasip3 only forwards
+# `async-spawn`, so enable it here directly (Cargo unifies features across the
+# graph, turning it on for wasip3's generated code too). Version pinned to match
+# wasip3's wit-bindgen. WITHOUT this, any outbound tool traps under concurrency.
+wit-bindgen = { version = "0.57.1", default-features = false, features = [
+    "async",
+    "async-spawn",
+    "inter-task-wakeup",
+] }
+
 http = "1"
 http-body = "1"
 http-body-util = "0.1"

@@ -5,7 +5,7 @@ description: Build, test, and deploy an MCP server as a WebAssembly component on
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 3 (updated after: premiere-mcp — domain-math correctness, deploy hygiene)
+Version: 4 (updated after: sec-edgar-mcp — outbound APIs, concurrency, caching)
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -75,21 +75,46 @@ Replace the example tools. Patterns:
 Outbound HTTP from a tool:
 
 ```rust
-let request = http::Request::get(url).body(bytes::Bytes::new())
+let request = http::Request::get(url)
+    .header("User-Agent", ua)                 // set REQUIRED upstream headers
+    .body(bytes::Bytes::new())
     .map_err(|e| ErrorData::invalid_params(e.to_string(), None))?;
-let response = crate::bridge::outbound::fetch(request).await; // 30s deadline, 4MiB cap
+let response = crate::bridge::outbound::fetch(request).await; // deadline + size cap
 ```
 
-- Always set required upstream headers on the request (e.g. SEC EDGAR
-  requires a descriptive `User-Agent`).
-- Keep the `deny_private_target` guard wired for any tool that accepts a
-  client-supplied URL. Tools that call a FIXED upstream host don't need it
-  (the host either is or isn't in `allowedHosts`).
-- Every upstream host must be listed in `workload.yaml` `allowedHosts` (and
-  the `.wash/config.yaml` workload section). Empty list = deny-all.
+- **CRITICAL — enable `inter-task-wakeup`.** Any server that does outbound
+  HTTP MUST add this to `Cargo.toml` (the template already does):
+  ```toml
+  wit-bindgen = { version = "0.57.1", default-features = false,
+      features = ["async", "async-spawn", "inter-task-wakeup"] }
+  ```
+  Without it, concurrent invocations on one reused instance **trap** ("Rust
+  task cannot sleep waiting only on Rust-originating events") the moment a task
+  parks on a Rust-only event (the bridge's request lock / outbound oneshot).
+  Pure-compute servers never hit this; outbound servers hit it under any real
+  concurrency. `wasip3` does not forward the feature, so declare `wit-bindgen`
+  directly — Cargo unifies it into wasip3's generated code.
+- Always set upstream-required headers (e.g. SEC EDGAR needs a descriptive
+  `User-Agent` or it returns 403).
+- Map upstream status codes deliberately: distinguish "not found" (a normal
+  tool result — `CallToolResult::error`) from an infrastructure failure, and
+  surface actionable messages (403 → "check the User-Agent / API key").
+- Keep the `deny_private_target` guard for any tool taking a client-supplied
+  URL. Tools calling a FIXED upstream host don't need it (allowlist decides).
+- Every upstream host must be in `workload.yaml` `allowedHosts` AND the
+  `.wash/config.yaml` workload section. Empty = deny-all. Raise
+  `MCP_OUTBOUND_MAX_BYTES` if the API returns bodies over 4 MiB.
+- **Instance-level caching is fine and useful.** Requests are serialized by
+  the transport and share the instance's statics, so a
+  `OnceLock<tokio::sync::Mutex<Option<Arc<T>>>>` lazily populated on first use
+  (e.g. SEC's ticker→CIK table) caches across requests for that instance's
+  lifetime — exactly like the reference. Not shared across instances; that's
+  correct for a stateless-scaling model.
 - Secrets (API keys): read from env (`std::env::var`); in the Workload use
   `secretFrom` + `cosmonic_set_secret` for production, plain env config only
   for examples — and say so in the README.
+- **Make upstream base URLs overridable via env** (default to the real host)
+  so the e2e can point at a local fixture — hermetic, network-free CI.
 
 ## Phase 3 — compile gates
 
@@ -116,6 +141,13 @@ Edit `scripts/e2e.sh`:
   python fixture in the template's e2e) and, where the real API is keyless
   and cheap, one live smoke case. Wasmtime's `-Shttp` has no outbound
   allow-list, so fixtures work without policy changes.
+- **Fixture servers MUST be threaded** (`ThreadingHTTPServer`, not
+  `HTTPServer`) — the concurrency test fires 8 requests at once, and a
+  single-threaded fixture refuses the extras, producing spurious "fetch
+  failed" results that look like a server bug but are the test harness's fault.
+- The shared harness's concurrency test uses `FIRST_TOOL_*`; point it at an
+  outbound tool so it actually exercises concurrent outbound (the case that
+  catches the `inter-task-wakeup` trap).
 
 Run: `scripts/e2e.sh` — all cases green before proceeding.
 

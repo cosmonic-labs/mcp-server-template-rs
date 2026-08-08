@@ -568,6 +568,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "wasip3",
+ "wit-bindgen 0.57.1",
 ]
 
 [[package]]
