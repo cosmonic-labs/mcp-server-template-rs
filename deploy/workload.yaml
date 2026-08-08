@@ -1,0 +1,75 @@
+# Cosmonic Desktop deployment manifest — template.
+#
+# Two manifests ship with this project:
+#   workload.yaml          local iteration: image promoted to Desktop's
+#                          built-in registry, host <name>.localhost
+#   deploy/workload.yaml   (this file) the published image: a public OCI
+#                          registry, host <name>.localhost.cosmonic.sh
+#
+# When you fork the template, rename every `mcp-server-template` /
+# `mcp-server` occurrence and set the mcp.ai/* labels for your server.
+# Deploy docs: https://cosmonic.com/docs/desktop
+apiVersion: runtime.wasmcloud.dev/v1alpha1
+kind: Workload
+metadata:
+  name: "mcp-server"
+  namespace: default
+  # Cosmonic Desktop detects the mcp.ai/* labels (with the
+  # desktop.cosmonic.com/source annotation below) to catalog this workload
+  # as an MCP server and drive MCP-specific behavior — how it is listed,
+  # connected to clients, and which transport/auth handling applies.
+  labels:
+    app.kubernetes.io/name: "mcp-server-template"
+    app.kubernetes.io/version: "0.1.0"
+    # Client authentication the server expects: none | oauth. This template
+    # ships `none` and relies on the deployment boundary (see docs/auth.md).
+    "mcp.ai/auth-type": none
+    # Subject area of the tools, used for cataloging (e.g. "sec-edgar",
+    # "federal-reserve-economic-data"). Set this when you fork.
+    mcp.ai/domain: "template"
+    # MCP capability surface this server exposes: tools (this template),
+    # or prompts/resources for servers that serve those.
+    "mcp.ai/function-type": tools
+    # MCP specification revision the server speaks. The template's rmcp
+    # transport config pins the stateless 2026-07-28 core.
+    "mcp.ai/spec-version": "2026-07-28"
+    # stateless: no sessions or affinity — every request is self-contained,
+    # so Desktop may scale instances freely.
+    mcp.ai/statefulness: stateless
+    # MCP transport: this template serves streamable HTTP (POST + SSE).
+    mcp.ai/transport: "streamable-http"
+  annotations:
+    # Marks the workload as MCP-sourced so Desktop applies the mcp.ai labels.
+    desktop.cosmonic.com/source: mcp
+spec:
+  hostInterfaces:
+    - namespace: wasi
+      package: http
+      # wasi:http@0.3.0 (WASI p3): the single `handler` interface is this
+      # component's ingress export — not the p2 `incoming-handler`.
+      interfaces:
+        - "handler"
+      config:
+        host: "mcp-server.localhost.cosmonic.sh"
+  components:
+    - name: "mcp-server"
+      # Point at your published image; Desktop pins the tag to a digest at
+      # apply time. To deploy a locally promoted build instead, use the
+      # digest-pinned oci-registry.localhost:8200 reference promote returns.
+      image: "ghcr.io/<org>/mcp-server-template:0.1.0"
+      poolSize: 1
+      maxInvocations: 0
+      localResources:
+        environment:
+          config:
+            RUST_LOG: info
+            # DNS-rebinding guard: must list the ingress host(s) above.
+            MCP_ALLOWED_HOSTS: "mcp-server.localhost.cosmonic.sh,mcp-server.localhost"
+          # API keys and other secrets: register a reference with
+          # `cosmonic_set_secret` (keychain://... URI + the env var to
+          # inject) and list it here — never inline a secret value.
+          #   secretFrom:
+          #     - name: my-api-key
+        # Outbound allow-list — empty means deny-all (fail-closed). List
+        # every host your tools dial.
+        allowedHosts: []

@@ -29,13 +29,14 @@ Template for building **Model Context Protocol (MCP) servers** as
 ```
 ├── .cargo/config.toml   # default target wasm32-wasip2 + tokio_unstable cfg
 ├── .wash/config.yaml    # wash v2 / Cosmonic Desktop project config
+├── deploy/workload.yaml # deploy manifest for the published image (mcp.ai labels)
 ├── docs/auth.md         # authorization options for the Desktop use-case
 ├── src/
 │   ├── lib.rs           # wasi:http/handler export, streaming response pump
 │   ├── bridge.rs        # tokio ↔ component-model-async bridge + outbound HTTP
 │   ├── server.rs        # ServerHandler + your tools — start here
 │   └── telemetry.rs     # tracing/OTEL wiring
-└── workload.yaml        # Cosmonic Workload manifest (wasmCloud v2 CRD)
+└── workload.yaml        # local-dev Workload manifest (built-in registry)
 ```
 
 ## Prerequisites
@@ -68,6 +69,14 @@ installation and concepts. In brief:
    `cosmonic_apply_workload` MCP tool, or `POST /v1/workloads`). The manifest
    already routes ingress by Host header (`mcp-server.localhost`) and sets
    `MCP_ALLOWED_HOSTS` to match.
+
+For a published image (a public OCI registry rather than a locally promoted
+build), use [`deploy/workload.yaml`](deploy/workload.yaml) instead. Both
+manifests carry the `mcp.ai/*` labels and the
+`desktop.cosmonic.com/source: mcp` annotation — Cosmonic Desktop detects
+these to catalog the workload as an MCP server and drive MCP-specific
+behavior (listing, client connection, transport/auth handling); the deploy
+manifest documents what each label means. Keep them accurate when you fork.
 
 ### Talk to it
 

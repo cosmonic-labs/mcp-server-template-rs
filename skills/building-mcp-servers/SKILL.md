@@ -49,17 +49,18 @@ Copy the template (do not `git clone` into the new project):
 ```bash
 SRC=<path-to-mcp-server-template-rs>
 mkdir -p <project> && cd <project>
-cp -R $SRC/.cargo $SRC/.wash $SRC/src $SRC/scripts $SRC/Cargo.toml $SRC/Cargo.lock \
-      $SRC/workload.yaml $SRC/.gitignore .
+cp -R $SRC/.cargo $SRC/.wash $SRC/src $SRC/scripts $SRC/deploy $SRC/Cargo.toml \
+      $SRC/Cargo.lock $SRC/workload.yaml $SRC/.gitignore .
 ```
 
 Then rename everywhere, keeping the three names aligned:
 - `Cargo.toml` `[package] name` (kebab-case, e.g. `sec-edgar-mcp`)
 - `.wash/config.yaml` `build.component_path` → `target/wasm32-wasip2/release/<name_with_underscores>.wasm`
 - `scripts/e2e.sh` `WASM=` path
-- `workload.yaml`: `metadata.name`, hostInterface `config.host`
-  (`<name>.localhost`), labels (`app.kubernetes.io/name`, `mcp.ai/domain`),
-  and env `MCP_ALLOWED_HOSTS` = the same `<name>.localhost`.
+- `workload.yaml` AND `deploy/workload.yaml`: `metadata.name`, hostInterface
+  `config.host` (`<name>.localhost` / `<name>.localhost.cosmonic.sh`),
+  labels (`app.kubernetes.io/name`, `mcp.ai/domain`), the `image` ref, and
+  env `MCP_ALLOWED_HOSTS` = the matching host(s).
 
 `mcp.ai` label conventions (catalogued by Cosmonic Desktop):
 `auth-type: none|oauth`, `domain: <subject-area>`, `function-type: tools`,
@@ -237,7 +238,10 @@ a deployment target.
 Ship two manifests: `workload.yaml` at the project root for local iteration
 (`oci-registry.localhost:8200` image, `<name>.localhost` host) and
 `deploy/workload.yaml` for the published image (`ghcr.io/...`,
-`<name>.localhost.cosmonic.sh` host) — see the mcp-examples repos.
+`<name>.localhost.cosmonic.sh` host). The template ships both — its
+`deploy/workload.yaml` documents each `mcp.ai/*` label, which Cosmonic
+Desktop detects (with `desktop.cosmonic.com/source: mcp`) to catalog and
+manage the workload as an MCP server. See mcp-examples for filled-in ones.
 
 ## Phase 6 — README
 
