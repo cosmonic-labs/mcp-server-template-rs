@@ -5,7 +5,7 @@ description: Build, test, and deploy an MCP server as a WebAssembly component on
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 4 (updated after: sec-edgar-mcp — outbound APIs, concurrency, caching)
+Version: 5 (updated after: fred-mcp — API-key secrets, query-param auth)
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -112,9 +112,20 @@ let response = crate::bridge::outbound::fetch(request).await; // deadline + size
   correct for a stateless-scaling model.
 - Secrets (API keys): read from env (`std::env::var`); in the Workload use
   `secretFrom` + `cosmonic_set_secret` for production, plain env config only
-  for examples — and say so in the README.
+  for examples — and say so in the README. **Never compile a key into the
+  component**; never commit a real key to `workload.yaml`.
+- When a key is **missing**, return a distinct, actionable tool error ("X is
+  not set. Get one at <url> and set it via …"), not a generic failure — and
+  e2e-test that path with a second server instance started without the key.
+- Query-parameter auth (FRED) vs header auth (most APIs): put the key wherever
+  the upstream wants it, and **percent-encode** query values yourself (the
+  `http` crate won't). The key value itself usually shouldn't be encoded if
+  it's already URL-safe, but encode user-supplied query text.
 - **Make upstream base URLs overridable via env** (default to the real host)
-  so the e2e can point at a local fixture — hermetic, network-free CI.
+  so the e2e can point at a local fixture — hermetic, network-free CI. This is
+  the single highest-leverage testability move for an outbound server.
+- **Clamp numeric params to the upstream's documented range** (FRED `limit`
+  1..100000) rather than forwarding raw client values that the API would 400.
 
 ## Phase 3 — compile gates
 
