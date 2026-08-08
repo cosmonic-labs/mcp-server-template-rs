@@ -5,7 +5,7 @@ description: Build, test, and deploy an MCP server as a WebAssembly component on
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 2 (updated after: after-effects-mcp — pure-compute server, numeric traps)
+Version: 3 (updated after: premiere-mcp — domain-math correctness, deploy hygiene)
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -122,6 +122,23 @@ Run: `scripts/e2e.sh` — all cases green before proceeding.
 ## Phase 5 — deploy to Cosmonic Desktop and verify
 
 The daemon socket is `~/Library/Application Support/Cosmonic/cosmonicd.sock`.
+
+**Deploy hygiene — do NOT clobber existing workloads (learned the hard way).**
+`cosmonic_apply_workload` is idempotent BY `namespace/name`: applying a name
+that already exists *replaces* its spec, silently discarding a running
+deployment. Before applying:
+1. `cosmonic_list_workloads` and check for your intended `namespace/name`. The
+   ingress `host` is ALSO global — two workloads cannot share one `config.host`
+   even across namespaces.
+2. Deploy examples into a **dedicated namespace** (e.g. `mcp-examples`) and use
+   a **distinct host suffix** (e.g. `<name>.example.localhost`) so you never
+   collide with reference/demo deployments — the reference demos here use
+   `<name>.localhost.cosmonic.sh` and plain `<name>.localhost`.
+3. If you must replace a workload, `cosmonic_inspect` its current image first
+   and save the digest-pinned ref so you can restore it.
+The shipped `workload.yaml` should still use the clean `<name>.localhost` host
+(correct for a fresh machine); only your local *verification* deploy needs the
+collision-avoiding host.
 
 ```bash
 SOCK="$HOME/Library/Application Support/Cosmonic/cosmonicd.sock"
@@ -241,3 +258,20 @@ client-supplied numbers:
   surfaces it as a **tool-level error** (`isError:true`), NOT JSON-RPC
   `-32602`. A missing/ill-typed *whole* params object is `-32602`. Assert
   accordingly.
+
+### Domain-math correctness (from premiere-mcp)
+
+- **Test against published reference vectors**, not just roundtrips. Drop-frame
+  timecode has canonical checkpoints (frame 1800 → `00:01:00;02`, 17982 →
+  `00:10:00;00`, 107892 → `01:00:00;00` at 29.97); assert those exact values so
+  a subtly-wrong-but-self-consistent implementation can't pass.
+- **Reject impossible inputs the domain defines as invalid**, not just
+  malformed ones (e.g. drop-frame labels `;00`/`;01` don't exist at non-tenth
+  minutes; `drop_frame` is meaningless at 24/25/exact-30). Validate against the
+  domain rules, and make the derived-integer guards (`is_multiple_of`,
+  fractional-rate checks) do double duty as trap prevention.
+- `saturating_*` is the right tool when a pathological-but-in-type input
+  (near `u64::MAX`) should degrade to a huge-but-sane answer rather than wrap;
+  `checked_*` + error when the input is genuinely out of range. Prefer one of
+  the two over bare `+`/`*` on any client-influenced integer.
+- clippy on this toolchain wants `x.is_multiple_of(n)` over `x % n == 0`.
