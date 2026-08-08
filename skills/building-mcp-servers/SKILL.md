@@ -5,7 +5,7 @@ description: Build, test, and deploy an MCP server as a WebAssembly component on
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 1 (updated after: template hardening review)
+Version: 2 (updated after: after-effects-mcp — pure-compute server, numeric traps)
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -199,3 +199,45 @@ Cosmonic Desktop), and example curl calls.
 - **Big upstream JSON**: outbound responses are capped at 4 MiB — pick
   API endpoints that return bounded payloads (e.g. prefer per-concept over
   full-dump endpoints) and paginate/limit where the API supports it.
+- **Test assertions on errors**: `ErrorData::invalid_params(msg, _)` reaches
+  the client as JSON-RPC `{"error":{"code":-32602,"message":msg}}` — assert on
+  `-32602` or a substring of YOUR message, never the literal `"invalid_params"`
+  (that string never appears on the wire). Tool-level errors
+  (`CallToolResult::error`) instead appear as `"isError":true` inside a
+  `result`.
+- **Reuse the shared harness**: `scripts/mcp_e2e_lib.sh` provides the
+  framework tests (protocol, spec enforcement, robustness, Host guard) so each
+  server's `e2e.sh` only writes tool cases. Set `FIRST_TOOL_{NAME,ARGS,EXPECT}`
+  for the concurrency test before calling `framework_tests`.
+
+### Numeric-trap discipline (pure-compute tools) — from after-effects-mcp
+
+On `wasm32-wasip2` with `panic=abort`, ANY panic aborts the whole instance —
+a remotely-triggerable DoS. Release builds do NOT set `overflow-checks`, so
+integer overflow *wraps silently* (a correctness bug), but a few operations
+panic unconditionally regardless. For every tool doing arithmetic on
+client-supplied numbers:
+- **Integer `/` and `%` panic on a zero divisor, always.** A validated-positive
+  float divisor can still round/cast to `0` (e.g. `fps=0.4` → `round() as u64`
+  → `0`). Validate the *derived integer*, not just the input float.
+- **`as` casts from float saturate** (NaN→0, huge→MAX since Rust 1.45) — safe
+  from traps but can produce absurd values; validate range.
+- **Use `checked_mul`/`checked_add`** on unbounded `u64` inputs and return
+  `invalid_params` on overflow, rather than letting release wrap silently.
+- **Re-check the *output* is finite**: finite inputs can produce `±inf`/`NaN`
+  (`1e308 - -1e308`), and `serde_json` serializes those as `null`. Error out
+  or clamp instead of emitting a null value.
+- **Never interpolate a non-finite float into generated code text** — it
+  formats as `NaN`/`inf`, which is invalid in the target language. There's no
+  string-injection risk from an `f64` (Display only yields numeric tokens),
+  but substitute a default for non-finite values.
+- The reference AE server is a *live-app bridge* (wasi:keyvalue queue + a
+  polling ExtendScript panel); a Wasm component can't drive a GUI app, so this
+  example distills the reference's domain knowledge (easing constants, ADBE
+  effect match-names, the three color conventions) into pure-compute tools.
+  When a reference targets a live host app, port its *knowledge*, not its
+  transport.
+- **Unknown enum variant** in a params struct fails deserialization and rmcp
+  surfaces it as a **tool-level error** (`isError:true`), NOT JSON-RPC
+  `-32602`. A missing/ill-typed *whole* params object is `-32602`. Assert
+  accordingly.

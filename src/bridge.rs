@@ -177,8 +177,18 @@ pub mod outbound {
     use http_body_util::{BodyExt as _, Full};
     use wasip3::http_compat::{http_from_wasi_response, http_into_wasi_request};
 
-    /// Upper bound on a buffered outbound response body.
-    const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+    /// Default upper bound on a buffered outbound response body, overridable
+    /// with `MCP_OUTBOUND_MAX_BYTES`. Some upstreams (e.g. SEC EDGAR's
+    /// `company_tickers.json` or `submissions` documents) exceed the 4 MiB
+    /// request-side default, so tools that expect large payloads can raise it.
+    const DEFAULT_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+    fn max_response_bytes() -> usize {
+        std::env::var("MCP_OUTBOUND_MAX_BYTES")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(DEFAULT_MAX_RESPONSE_BYTES)
+    }
 
     /// Deadline for one outbound exchange (connect through body read),
     /// overridable with `MCP_OUTBOUND_TIMEOUT_MS`. Without it, an upstream
@@ -196,8 +206,8 @@ pub mod outbound {
         /// The exchange did not complete within the outbound deadline.
         #[error("outbound request timed out after {0} ms")]
         TimedOut(u64),
-        /// The response body exceeded [`MAX_RESPONSE_BYTES`].
-        #[error("response body larger than {MAX_RESPONSE_BYTES} bytes")]
+        /// The response body exceeded the outbound size limit.
+        #[error("response body exceeded the outbound size limit")]
         ResponseTooLarge,
         /// The bridge driver went away before replying (component teardown).
         #[error("outbound bridge unavailable")]
@@ -231,12 +241,13 @@ pub mod outbound {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_TIMEOUT_MS);
+        let max_bytes = max_response_bytes();
         super::timeout(timeout_ms, async move {
             let wasi_request = http_into_wasi_request(request.map(Full::new))?;
             let wasi_response = wasip3::http::client::send(wasi_request).await?;
             let response = http_from_wasi_response(wasi_response)?;
             let (parts, body) = response.into_parts();
-            let bytes = http_body_util::Limited::new(body, MAX_RESPONSE_BYTES)
+            let bytes = http_body_util::Limited::new(body, max_bytes)
                 .collect()
                 .await
                 .map_err(|err| {
