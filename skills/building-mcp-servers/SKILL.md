@@ -11,6 +11,21 @@ This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
 living list — read it BEFORE writing code, not after something breaks.
 
+## Reference implementations
+
+Four worked examples live in
+[cosmonic-labs/mcp-examples](https://github.com/cosmonic-labs/mcp-examples).
+Copy the one whose shape matches your target:
+
+| Your server is… | Start from | It demonstrates |
+|---|---|---|
+| Pure compute (math, codegen, conversion) | `after-effects-mcp` | enum params, numeric-trap discipline, structured output |
+| Pure compute with tricky domain math | `premiere-mcp` | reference-vector testing, domain validation, checked/saturating arithmetic |
+| Outbound API, no key | `sec-edgar-mcp` | `bridge::outbound::fetch`, required upstream headers, instance caching, `allowedHosts`, base-URL test override |
+| Outbound API with a key | `fred-mcp` | env/secret API keys, query-param auth, param clamping, missing-key UX |
+
+They all source the shared test harness `scripts/mcp_e2e_lib.sh`.
+
 ## Non-negotiable guardrails
 
 1. **Spec**: MCP 2026-07-28 (stateless core, `Mcp-Method`/`Mcp-Name` header
