@@ -101,7 +101,7 @@ impl wasip3::exports::http::handler::Guest for Component {
             .try_into()
             .map_err(|err| ErrorCode::InternalError(Some(format!("invalid headers: {err}"))))?;
         let (mut writer, body_rx, result_rx) = BodyWriter::new();
-        let (wasi_response, _transmit) = Response::new(headers, Some(body_rx), result_rx);
+        let (wasi_response, transmit) = Response::new(headers, Some(body_rx), result_rx);
         wasi_response
             .set_status_code(parts.status.as_u16())
             .map_err(|()| ErrorCode::InternalError(Some("invalid status code".into())))?;
@@ -144,6 +144,14 @@ impl wasip3::exports::http::handler::Guest for Component {
             drop(writer.stream_writer);
             let _ = writer.result_writer.write(Ok(trailers)).await;
             bridge::drain_stale_jobs();
+            // Release the request lock before observing the transmission
+            // result — this wait is for diagnostics only and must not extend
+            // the exchange.
+            drop(_guard);
+            let transmit = std::future::IntoFuture::into_future(transmit);
+            if let Ok(Err(code)) = bridge::timeout(SEND_FRAME_TIMEOUT_MS, transmit).await {
+                tracing::warn!(parent: &span, error = %code, "response transmission failed");
+            }
         });
 
         Ok(wasi_response)
