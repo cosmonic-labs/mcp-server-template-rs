@@ -1,11 +1,11 @@
 ---
 name: building-mcp-servers
-description: Build, test, and deploy an MCP server as a WebAssembly component on Cosmonic Desktop using the mcp-server-template-rs framework (rmcp 3.x, wasi:http@0.3.0, MCP spec 2026-07-28). Use when creating a new MCP server, adding tools to one, or deploying/debugging one on Cosmonic Desktop or wasmtime.
+description: Build, test, and deploy an MCP server as a WebAssembly component on Cosmonic Desktop using the mcp-server-template-rs framework (rmcp 3.x, wasi:http@0.3.0, MCP spec 2026-07-28). Use when creating a new MCP server, adding tools to one, or deploying/debugging one on Cosmonic Desktop.
 ---
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 5 (updated after: fred-mcp — API-key secrets, query-param auth)
+Version: 6 (updated after: deploy/ manifests for Desktop; Desktop-only deploy docs)
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -64,8 +64,8 @@ Then rename everywhere, keeping the three names aligned:
 `mcp.ai` label conventions (catalogued by Cosmonic Desktop):
 `auth-type: none|oauth`, `domain: <subject-area>`, `function-type: tools`,
 `spec-version: "2026-07-28"`, `statefulness: stateless`,
-`transport: streamable-http`, `sandbox-isolation: wasmtime`,
-`agent-access: internal-only`.
+`transport: streamable-http`; plus the annotation
+`desktop.cosmonic.com/source: mcp`.
 
 ## Phase 2 — implement tools (src/server.rs)
 
@@ -228,15 +228,23 @@ one real tool call the same way (add `Mcp-Method: tools/call`,
 `Mcp-Name: <tool>`, and `"_meta":{"io.modelcontextprotocol/protocolVersion":
 "2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}` in params).
 
-Local testing without Desktop: `wasmtime serve -Sp3,cli,http --addr
-127.0.0.1:<port> <wasm>` — ALWAYS pass `--addr 127.0.0.1` (default binds
-0.0.0.0).
+Deployment is Cosmonic Desktop only (docs:
+<https://cosmonic.com/docs/desktop>). The e2e harness serves the component
+under wasmtime purely as test infrastructure (`-Sp3,cli,http`, always
+`--addr 127.0.0.1` — the default binds 0.0.0.0); do not document wasmtime as
+a deployment target.
+
+Ship two manifests: `workload.yaml` at the project root for local iteration
+(`oci-registry.localhost:8200` image, `<name>.localhost` host) and
+`deploy/workload.yaml` for the published image (`ghcr.io/...`,
+`<name>.localhost.cosmonic.sh` host) — see the mcp-examples repos.
 
 ## Phase 6 — README
 
 Every server gets a README: what it does, tool table (name, params, output),
-env vars, `allowedHosts` needed, build/run/deploy commands (both wasmtime and
-Cosmonic Desktop), and example curl calls.
+env vars, `allowedHosts` needed, build/test commands, Cosmonic Desktop
+deployment (link <https://cosmonic.com/docs/desktop>), and example curl
+calls. Do not document wasmtime as a way to run the server.
 
 ## Pitfalls (living list — add what bites you)
 

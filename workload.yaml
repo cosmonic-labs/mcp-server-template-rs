@@ -17,14 +17,12 @@ metadata:
   labels:
     app.kubernetes.io/name: "mcp-server-template"
     app.kubernetes.io/version: "0.1.0"
-    mcp.ai/auth-type: none
+    "mcp.ai/auth-type": none
     mcp.ai/domain: "template"
-    mcp.ai/function-type: tools
-    mcp.ai/spec-version: "2026-07-28"
+    "mcp.ai/function-type": tools
+    "mcp.ai/spec-version": "2026-07-28"
     mcp.ai/statefulness: stateless
     mcp.ai/transport: "streamable-http"
-    mcp.ai/sandbox-isolation: wasmtime
-    mcp.ai/agent-access: internal-only
   annotations:
     desktop.cosmonic.com/source: mcp
 spec:
@@ -38,6 +36,7 @@ spec:
     - name: mcp
       image: oci-registry.localhost:8200/mcp-server-template:0.1.0
       poolSize: 1
+      maxInvocations: 0
       localResources:
         environment:
           config:

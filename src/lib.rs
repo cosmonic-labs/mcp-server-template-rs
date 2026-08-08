@@ -193,8 +193,13 @@ fn transport_config() -> StreamableHttpServerConfig {
 /// Builds a plain-text `413 Payload Too Large` response without involving the
 /// MCP transport (the request was rejected before it could be parsed).
 fn payload_too_large(limit: usize) -> Result<Response, ErrorCode> {
+    let headers = Fields::from_list(&[(
+        "content-type".to_string(),
+        b"text/plain; charset=utf-8".to_vec(),
+    )])
+    .map_err(|err| ErrorCode::InternalError(Some(format!("invalid headers: {err}"))))?;
     let (mut writer, body_rx, result_rx) = BodyWriter::new();
-    let (response, _transmit) = Response::new(Fields::new(), Some(body_rx), result_rx);
+    let (response, _transmit) = Response::new(headers, Some(body_rx), result_rx);
     response
         .set_status_code(413)
         .map_err(|()| ErrorCode::InternalError(Some("invalid status code".into())))?;

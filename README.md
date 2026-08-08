@@ -1,8 +1,8 @@
 # mcp-server-template-rs
 
 Template for building **Model Context Protocol (MCP) servers** as
-**WebAssembly components** that run on [Cosmonic Desktop] and any
-wasmCloud v2 / Wasmtime 46+ runtime.
+**WebAssembly components** that deploy on [Cosmonic Desktop]
+(wasmCloud v2) — see the [Cosmonic Desktop docs].
 
 - **Official SDK**: [`rmcp`] 3.x (the official MCP Rust SDK), speaking the
   [2026-07-28 MCP specification] — stateless protocol core, header-based
@@ -41,7 +41,8 @@ wasmCloud v2 / Wasmtime 46+ runtime.
 ## Prerequisites
 
 - Rust 1.90+ with the wasip2 target: `rustup target add wasm32-wasip2`
-- To run locally: [Cosmonic Desktop] (runtime ≥ 2.5), or `wasmtime` ≥ 46
+- To deploy: [Cosmonic Desktop] (runtime ≥ 2.5) — install and setup per the
+  [Cosmonic Desktop docs]
 
 ## Build
 
@@ -54,24 +55,19 @@ component directly. The output at
 `target/wasm32-wasip2/release/mcp_server_template.wasm` exports
 `wasi:http/handler@0.3.0` (verify with `wasm-tools component wit <path>`).
 
-## Run
+## Deploy on Cosmonic Desktop
 
-### Cosmonic Desktop
+Deployment is via [Cosmonic Desktop] — see the [Cosmonic Desktop docs] for
+installation and concepts. In brief:
 
-Open the project in Cosmonic Desktop (or register it with the daemon), then
-promote and apply `workload.yaml` with the digest-pinned image ref from
-promote. Or with wasmtime:
-
-```console
-$ wasmtime serve -Sp3,cli,http --addr 127.0.0.1:8080 \
-    target/wasm32-wasip2/release/mcp_server_template.wasm
-```
-
-Always pass `--addr 127.0.0.1:…` — wasmtime's default is `0.0.0.0`, which
-exposes the server to your whole network. Note that `-Shttp` enables
-*unfiltered* outbound HTTP (no `allowedHosts` policy exists under plain
-wasmtime); the in-guest guard on `http_get` refuses local/private targets
-unless `MCP_HTTP_GET_ALLOW_LOCAL=true` is set.
+1. **Register** the project with the daemon (or open it in the Desktop UI) —
+   the project config is `.wash/config.yaml`.
+2. **Promote** — builds the component and pushes it to Desktop's built-in
+   registry, returning a **digest-pinned image reference**.
+3. **Apply** `workload.yaml` with that image reference (Desktop UI, the
+   `cosmonic_apply_workload` MCP tool, or `POST /v1/workloads`). The manifest
+   already routes ingress by Host header (`mcp-server.localhost`) and sets
+   `MCP_ALLOWED_HOSTS` to match.
 
 ### Talk to it
 
@@ -185,12 +181,14 @@ test binaries — the e2e harness is the test entry point.
 | `MCP_ALLOWED_HOSTS` | unset → localhost only | DNS-rebinding guard: comma-separated `Host` values to accept (`host` matches any port, `host:port` is exact, `*` disables the guard). Unset keeps rmcp's safe default (localhost/127.0.0.1/::1). **Deployments reached under another name must set this** — e.g. `mcp-server.localhost` on Cosmonic Desktop, as `workload.yaml` does. |
 | `MCP_HTTP_GET_ALLOW_LOCAL` | unset (deny) | Lets the `http_get` example tool target loopback/private/link-local addresses (development only). |
 | `MCP_OUTBOUND_TIMEOUT_MS` | `30000` | Deadline for one outbound `bridge::outbound::fetch` exchange. |
+| `MCP_OUTBOUND_MAX_BYTES` | `4194304` (4 MiB) | Upper bound on a buffered outbound response body; raise it for upstreams that return larger documents. |
 
 ## License
 
 Apache-2.0
 
 [Cosmonic Desktop]: https://cosmonic.com
+[Cosmonic Desktop docs]: https://cosmonic.com/docs/desktop
 [`rmcp`]: https://github.com/modelcontextprotocol/rust-sdk
 [2026-07-28 MCP specification]: https://blog.modelcontextprotocol.io/posts/2026-07-28/
 [`wasi:http/handler@0.3.0`]: https://github.com/WebAssembly/wasi-http
