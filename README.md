@@ -45,6 +45,21 @@ Template for building **Model Context Protocol (MCP) servers** as
 - To deploy: [Cosmonic Desktop] (runtime ≥ 2.5) — install and setup per the
   [Cosmonic Desktop docs]
 
+## Scaffold
+
+Start a new server from this template with `wash` (v2 syntax — the git URL is
+the positional argument; wash 2.x removed the old `--git` flag):
+
+```console
+$ wash new https://github.com/cosmonic-labs/mcp-server-template-rs --name my-mcp-server
+$ cd my-mcp-server
+```
+
+Then rename the `mcp-server-template` / `mcp-server` occurrences for your
+server: the `Cargo.toml` package name, `.wash/config.yaml`
+`build.component_path`, and in both workload manifests the `metadata.name`,
+ingress `host`, `mcp.ai/*` labels, `image` ref, and `MCP_ALLOWED_HOSTS`.
+
 ## Build
 
 ```console
@@ -90,8 +105,25 @@ $ curl -X POST http://mcp-server.localhost:8200/ \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
-Call a tool — note the 2026-07-28 conventions: routing headers and per-request
-`_meta` instead of a session:
+Every request after `initialize` follows the 2026-07-28 stateless
+conventions: an `Mcp-Method` routing header (plus `Mcp-Name` for tool calls),
+and a per-request `_meta` in params carrying **both**
+`io.modelcontextprotocol/protocolVersion` and
+`io.modelcontextprotocol/clientCapabilities`. Omit the header or either
+`_meta` field and the server answers with JSON-RPC `-32602` — any conformant
+streamable-HTTP client sends all of this automatically; only hand-written
+requests (curl, scripts) need to supply it themselves. List the tools:
+
+```console
+$ curl -X POST http://mcp-server.localhost:8200/ \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2026-07-28' \
+    -H 'Mcp-Method: tools/list' \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+Call a tool:
 
 ```console
 $ curl -X POST http://mcp-server.localhost:8200/ \
@@ -99,8 +131,8 @@ $ curl -X POST http://mcp-server.localhost:8200/ \
     -H 'Accept: application/json, text/event-stream' \
     -H 'MCP-Protocol-Version: 2026-07-28' \
     -H 'Mcp-Method: tools/call' -H 'Mcp-Name: add' \
-    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"add","arguments":{"a":1.5,"b":2.5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
-data: {"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"{\"sum\":4.0}"}],"structuredContent":{"sum":4.0},"isError":false}}
+    -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"add","arguments":{"a":1.5,"b":2.5},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+data: {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","content":[{"type":"text","text":"{\"sum\":4.0}"}],"structuredContent":{"sum":4.0},"isError":false}}
 ```
 
 Responses arrive SSE-framed (`Content-Type: text/event-stream`, `data:`
