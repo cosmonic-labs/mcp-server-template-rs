@@ -61,21 +61,21 @@ mkdir -p <project> && cd <project>
 cp -R $SRC/.cargo $SRC/.wash $SRC/src $SRC/scripts $SRC/deploy $SRC/Cargo.toml \
       $SRC/Cargo.lock $SRC/workload.yaml $SRC/.gitignore .
 # The served skill — `src/skills.rs` include_str!s these, so the build breaks
-# without them. Copy the template's skill and rename it to your server:
-mkdir -p skills && cp -R $SRC/skills/mcp-server-template skills/<name>
+# without them:
+mkdir -p skills && cp -R $SRC/skills/server skills/server
 ```
 
 Do **not** copy `$SRC/skills/building-mcp-servers` — that is this document,
-guidance for the agent doing the building. `skills/<name>/` is a different
-thing: content the finished server serves to its own clients.
+guidance for the agent doing the building. `skills/server/` is a different
+thing: content the finished server serves to its own clients. Its directory
+name stays `server`; the skill's URI name is the **package name**, so
+`skill://<your-crate>/SKILL.md` follows the rename in `Cargo.toml` by itself.
 
 Then rename everywhere, keeping the names aligned:
 - `Cargo.toml` `[package] name` (kebab-case, e.g. `sec-edgar-mcp`)
 - `.wash/config.yaml` `build.component_path` → `target/wasm32-wasip2/release/<name_with_underscores>.wasm`
 - `scripts/e2e.sh` `WASM=` path (ports are already `${PORT:-8199}`-style
   overridable — still pick unique defaults if suites may run concurrently)
-- `src/skills.rs` `SKILLS`: the `name`, the `include_str!` paths, and every
-  entry in `files`
 - `workload.yaml` AND `deploy/workload.yaml`: `metadata.name`, hostInterface
   `config.host` (`<name>.localhost` / `<name>.localhost.cosmonic.sh`),
   labels (`app.kubernetes.io/name`, `mcp.ai/domain`), the `image` ref, and
@@ -162,7 +162,7 @@ let response = crate::bridge::outbound::fetch(request).await; // deadline + size
 - **Clamp numeric params to the upstream's documented range** (FRED `limit`
   1..100000) rather than forwarding raw client values that the API would 400.
 
-## Phase 2b — write the skill (skills/<name>/SKILL.md)
+## Phase 2b — write the skill (skills/server/SKILL.md)
 
 Non-negotiable: the server publishes its own operating manual. `src/skills.rs`
 embeds the files with `include_str!` and serves them over the resources
@@ -194,9 +194,10 @@ What to write:
   exhaustive tables into `references/<topic>.md`; link them relatively
   (`[Tools](references/TOOLS.md)`), which resolves against the skill root.
   That is the whole point of progressive disclosure.
-- Update the `SKILLS` table in `src/skills.rs` for every file you add — an
-  unlisted file is simply not served, and a stale `include_str!` path is a
-  compile error (which is the intended failure mode).
+- Update the `SKILLS` table in `src/skills.rs` for every supporting file you
+  add — an unlisted file is simply not served, and a stale `include_str!` path
+  is a compile error (which is the intended failure mode). The skill's own
+  `name` needs no edit: it is `env!("CARGO_PKG_NAME")`.
 - Keep `get_info().with_instructions(..)` pointing at `skill://index.json` so
   a client that does not read resources proactively still learns the skills
   exist.
