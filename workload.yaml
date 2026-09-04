@@ -20,6 +20,9 @@ metadata:
     "mcp.ai/auth-type": none
     mcp.ai/domain: "template"
     "mcp.ai/function-type": tools
+    # Skills over MCP: this server publishes SKILL.md playbooks as resources
+    # under skill:// URIs. Required of every server built from this template.
+    "mcp.ai/skills": "true"
     "mcp.ai/spec-version": "2026-07-28"
     mcp.ai/statefulness: stateless
     mcp.ai/transport: "streamable-http"

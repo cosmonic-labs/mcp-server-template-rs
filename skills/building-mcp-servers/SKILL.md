@@ -5,7 +5,7 @@ description: Build, test, and deploy an MCP server as a WebAssembly component on
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 6 (updated after: deploy/ manifests for Desktop; Desktop-only deploy docs)
+Version: 7 (updated after: Skills over MCP is mandatory; default route on GET /)
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -41,6 +41,15 @@ They all source the shared test harness `scripts/mcp_e2e_lib.sh`.
 4. **Never** await a WASI p3 future from tool code. Outbound HTTP goes
    through `crate::bridge::outbound::fetch` only.
 5. Every server ships with a passing `scripts/e2e.sh` adapted to its tools.
+6. **Skills over MCP is mandatory.** Every server built from this template
+   serves at least one skill — a `SKILL.md` playbook published over the
+   resources primitive under `skill://` URIs (Phase 2b). A server that ships
+   tools with no skill is incomplete: the tools are the hands, the skill is
+   the manual, and a client agent needs both.
+7. **The default route serves a document, not a 404.** `GET /` and
+   `GET /health` return the discovery JSON from `src/discovery.rs`. Keep that
+   routing intact; it is what a browser, a load-balancer probe, and a client
+   checking a deployment all hit first.
 
 ## Phase 1 — scaffold
 
@@ -51,12 +60,22 @@ SRC=<path-to-mcp-server-template-rs>
 mkdir -p <project> && cd <project>
 cp -R $SRC/.cargo $SRC/.wash $SRC/src $SRC/scripts $SRC/deploy $SRC/Cargo.toml \
       $SRC/Cargo.lock $SRC/workload.yaml $SRC/.gitignore .
+# The served skill — `src/skills.rs` include_str!s these, so the build breaks
+# without them. Copy the template's skill and rename it to your server:
+mkdir -p skills && cp -R $SRC/skills/mcp-server-template skills/<name>
 ```
 
-Then rename everywhere, keeping the three names aligned:
+Do **not** copy `$SRC/skills/building-mcp-servers` — that is this document,
+guidance for the agent doing the building. `skills/<name>/` is a different
+thing: content the finished server serves to its own clients.
+
+Then rename everywhere, keeping the names aligned:
 - `Cargo.toml` `[package] name` (kebab-case, e.g. `sec-edgar-mcp`)
 - `.wash/config.yaml` `build.component_path` → `target/wasm32-wasip2/release/<name_with_underscores>.wasm`
-- `scripts/e2e.sh` `WASM=` path
+- `scripts/e2e.sh` `WASM=` path (ports are already `${PORT:-8199}`-style
+  overridable — still pick unique defaults if suites may run concurrently)
+- `src/skills.rs` `SKILLS`: the `name`, the `include_str!` paths, and every
+  entry in `files`
 - `workload.yaml` AND `deploy/workload.yaml`: `metadata.name`, hostInterface
   `config.host` (`<name>.localhost` / `<name>.localhost.cosmonic.sh`),
   labels (`app.kubernetes.io/name`, `mcp.ai/domain`), the `image` ref, and
@@ -64,7 +83,7 @@ Then rename everywhere, keeping the three names aligned:
 
 `mcp.ai` label conventions (catalogued by Cosmonic Desktop):
 `auth-type: none|oauth`, `domain: <subject-area>`, `function-type: tools`,
-`spec-version: "2026-07-28"`, `statefulness: stateless`,
+`skills: "true"`, `spec-version: "2026-07-28"`, `statefulness: stateless`,
 `transport: streamable-http`; plus the annotation
 `desktop.cosmonic.com/source: mcp`.
 
@@ -143,6 +162,50 @@ let response = crate::bridge::outbound::fetch(request).await; // deadline + size
 - **Clamp numeric params to the upstream's documented range** (FRED `limit`
   1..100000) rather than forwarding raw client values that the API would 400.
 
+## Phase 2b — write the skill (skills/<name>/SKILL.md)
+
+Non-negotiable: the server publishes its own operating manual. `src/skills.rs`
+embeds the files with `include_str!` and serves them over the resources
+primitive:
+
+| URI | Content |
+|---|---|
+| `skill://index.json` | Catalog: each skill's name + trigger description. Generated from `SKILLS`; clients read it once at session start. |
+| `skill://<name>/SKILL.md` | The playbook. Read only when the description matches the task. |
+| `skill://<name>/<path>` | Supporting files. A relative link in the SKILL.md resolves here. |
+
+What to write:
+
+- **Frontmatter `description` is the trigger text**, and it is the only part
+  most clients see before deciding. Say *when to use this server*, not just
+  what it is — name the task shapes, not the implementation. Keep `name` and
+  `description` on **one line each**: `src/skills.rs` reads them with a
+  deliberately minimal frontmatter parser, not a YAML library.
+- **Write operating knowledge, not API docs.** The tool schemas are already on
+  the wire via `tools/list`; duplicating them wastes context. What a model
+  cannot infer from a schema: which tool to reach for first, how to sequence
+  two of them, which failures are retryable and which are policy decisions,
+  what the upstream's quirks are, what a confusing error actually means.
+- **Encode the error catalogue.** For each distinguishable failure your server
+  can produce, say what it means and what to do about it. This is the single
+  highest-value section — it is what stops an agent from retrying a permanent
+  denial in a loop.
+- **Push depth into supporting files.** Keep SKILL.md scannable and move
+  exhaustive tables into `references/<topic>.md`; link them relatively
+  (`[Tools](references/TOOLS.md)`), which resolves against the skill root.
+  That is the whole point of progressive disclosure.
+- Update the `SKILLS` table in `src/skills.rs` for every file you add — an
+  unlisted file is simply not served, and a stale `include_str!` path is a
+  compile error (which is the intended failure mode).
+- Keep `get_info().with_instructions(..)` pointing at `skill://index.json` so
+  a client that does not read resources proactively still learns the skills
+  exist.
+
+A server whose skill is a restatement of its tool descriptions has not met
+this guardrail. If you cannot name three things an agent would get wrong
+without the skill, you do not yet understand the domain well enough to have
+finished the server.
+
 ## Phase 3 — compile gates
 
 ```bash
@@ -164,6 +227,15 @@ Edit `scripts/e2e.sh`:
   unicode, injection-shaped strings).
 - Keep the protocol/spec-enforcement/robustness/guard sections — they test
   the framework and must keep passing.
+- Keep the **default route** and **skills over MCP** sections, retargeted at
+  your skill names/URIs: `GET /` is 200 JSON, `resources/list` contains your
+  `skill://` URIs, `resources/read` returns the playbook and its supporting
+  files, and an unknown `skill://` URI is a clean error. `resources/read`
+  needs `Mcp-Name: <the uri>` (SEP-2243 takes the name from `params.uri` for
+  resource methods, not `params.name`).
+- Ports are `${PORT:-8199}`-style overridable; a stale wasmtime from another
+  project holding the default port makes every case fail with someone else's
+  500s. If the whole suite goes red at once, check that first.
 - For tools calling a fixed upstream: add a local fixture server (see the
   python fixture in the template's e2e) and, where the real API is keyless
   and cheap, one live smoke case. Wasmtime's `-Shttp` has no outbound
@@ -246,9 +318,11 @@ manage the workload as an MCP server. See mcp-examples for filled-in ones.
 ## Phase 6 — README
 
 Every server gets a README: what it does, tool table (name, params, output),
-env vars, `allowedHosts` needed, build/test commands, Cosmonic Desktop
-deployment (link <https://cosmonic.com/docs/desktop>), and example curl
-calls. Do not document wasmtime as a way to run the server.
+the skill(s) it serves and their `skill://` URIs, env vars, `allowedHosts`
+needed, build/test commands, Cosmonic Desktop deployment (link
+<https://cosmonic.com/docs/desktop>), and example curl calls — including a
+`GET /` against the discovery route. Do not document wasmtime as a way to run
+the server.
 
 ## Pitfalls (living list — add what bites you)
 
@@ -292,6 +366,20 @@ calls. Do not document wasmtime as a way to run the server.
   (that string never appears on the wire). Tool-level errors
   (`CallToolResult::error`) instead appear as `"isError":true` inside a
   `result`.
+- **`resources/read` not-found code**: `ErrorData::resource_not_found` is
+  `-32002`, but rmcp remaps it to the standard `-32602` for peers negotiating
+  2026-07-28+ (SEP-2164) and only sends `-32002` to older ones. Assert
+  `-32602` plus a substring of your own message.
+- **`Mcp-Name` for resource methods** is the resource **URI** (`params.uri`),
+  not a tool name. Omit it and the request is rejected before your handler
+  runs.
+- **Declare `.enable_resources()`** in `get_info()` — without it a client has
+  no reason to call `resources/list`, and the skills are invisible even though
+  the handlers work.
+- **Frontmatter is parsed, not just embedded**: `src/skills.rs` reads `name`
+  and `description` out of the SKILL.md with a minimal single-line parser. A
+  multi-line YAML `description: >-` block yields an empty catalog entry, which
+  fails silently (the skill lists with no trigger text). Keep it on one line.
 - **Reuse the shared harness**: `scripts/mcp_e2e_lib.sh` provides the
   framework tests (protocol, spec enforcement, robustness, Host guard) so each
   server's `e2e.sh` only writes tool cases. Set `FIRST_TOOL_{NAME,ARGS,EXPECT}`

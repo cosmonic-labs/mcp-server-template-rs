@@ -28,8 +28,15 @@ metadata:
     # "federal-reserve-economic-data"). Set this when you fork.
     mcp.ai/domain: "template"
     # MCP capability surface this server exposes: tools (this template),
-    # or prompts/resources for servers that serve those.
+    # or prompts/resources for servers that serve those. Note that every
+    # template server also serves resources — see mcp.ai/skills below — this
+    # label names the server's *primary* surface.
     "mcp.ai/function-type": tools
+    # Skills over MCP (io.modelcontextprotocol/skills): the server publishes
+    # SKILL.md playbooks as read-only resources under skill:// URIs, so a
+    # connected agent can learn when and how to use the tools. Required of
+    # every server built from this template; see src/skills.rs.
+    "mcp.ai/skills": "true"
     # MCP specification revision the server speaks. The template's rmcp
     # transport config pins the stateless 2026-07-28 core.
     "mcp.ai/spec-version": "2026-07-28"

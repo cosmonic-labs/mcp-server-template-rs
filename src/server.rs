@@ -3,13 +3,25 @@
 //! Replace the example tools in this module with your own. The `#[tool]` /
 //! `#[tool_router]` / `#[tool_handler]` macros from `rmcp` generate the JSON
 //! schema for each tool from its `Parameters` type and wire up dispatch.
+//!
+//! Alongside the tools, this server publishes **skills** — natural-language
+//! playbooks served over the MCP resources primitive under `skill://` URIs.
+//! See [`crate::skills`]; the handlers at the bottom of this file are the
+//! protocol surface for them.
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo};
+use rmcp::model::{
+    CallToolResult, ContentBlock, Implementation, ListResourceTemplatesResult, ListResourcesResult,
+    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
+    ResourceContents, ServerCapabilities, ServerInfo,
+};
+use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
+
+use crate::skills;
 
 /// The MCP server for this component. One instance is created per request —
 /// the transport is stateless (2026-07-28 spec), so do not keep per-session
@@ -50,6 +62,17 @@ impl TemplateServer {
         Self {
             tool_router: Self::tool_router(),
         }
+    }
+
+    /// Names of the tools this server exposes, read off the generated router
+    /// so the discovery document (see [`crate::discovery`]) cannot drift from
+    /// what `tools/list` actually returns.
+    pub fn tool_names() -> Vec<String> {
+        Self::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.into_owned())
+            .collect()
     }
 
     /// Example tool: echoes the provided message back to the client.
@@ -200,16 +223,74 @@ fn deny_private_target(uri: &http::Uri) -> Option<String> {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TemplateServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new(
-                env!("CARGO_PKG_NAME"),
-                env!("CARGO_PKG_VERSION"),
-            ))
-            .with_instructions(
-                "Template MCP server running as a WebAssembly component on \
-                 Cosmonic Desktop. Use `echo`, `add`, or `current_time` to \
-                 verify connectivity, `http_get` to test outbound HTTP, then \
-                 replace them with your own tools.",
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                // Skills over MCP rides on the resources primitive: declaring
+                // it is what makes `skill://` URIs discoverable at all.
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(Implementation::new(
+            env!("CARGO_PKG_NAME"),
+            env!("CARGO_PKG_VERSION"),
+        ))
+        .with_instructions(
+            "Template MCP server running as a WebAssembly component on \
+             Cosmonic Desktop. Use `echo`, `add`, or `current_time` to \
+             verify connectivity, `http_get` to test outbound HTTP, then \
+             replace them with your own tools.\n\n\
+             This server publishes skills — playbooks describing when and how \
+             to use its tools. Read `skill://index.json` for the catalog, then \
+             read `skill://<name>/SKILL.md` for any skill whose description \
+             matches the task at hand.",
+        )
+    }
+
+    /// Skills over MCP: every skill file, plus the catalog, as resources.
+    ///
+    /// The whole set is returned in one page — a server embedding enough
+    /// skills for that to be unwieldy should honour `request.cursor` and set
+    /// `next_cursor` on the result instead.
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, ErrorData> {
+        Ok(ListResourcesResult::with_all_items(skills::resources()))
+    }
+
+    /// Parameterized `skill://` URIs, so a client can construct a skill
+    /// request without having enumerated every resource first.
+    async fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, ErrorData> {
+        Ok(ListResourceTemplatesResult::with_all_items(
+            skills::resource_templates(),
+        ))
+    }
+
+    #[tracing::instrument(name = "resources.read", skip(self, _context), fields(uri = %request.uri))]
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResponse, ErrorData> {
+        let (mime_type, text) = skills::read(&request.uri).ok_or_else(|| {
+            ErrorData::resource_not_found(
+                format!(
+                    "no resource at {}; read {} for the skills this server serves",
+                    request.uri,
+                    skills::INDEX_URI
+                ),
+                None,
             )
+        })?;
+        Ok(ReadResourceResult::new(vec![
+            ResourceContents::text(text, request.uri).with_mime_type(mime_type)
+        ])
+        .into())
     }
 }

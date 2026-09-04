@@ -11,9 +11,12 @@ set -u
 
 cd "$(dirname "$0")/.."
 
-PORT=8199
-GUARD_PORT=8198
-FIXTURE_PORT=8197
+# Ports are overridable so a suite can run alongside another server's e2e on
+# the same machine — a stale wasmtime from another project holding 8199 would
+# otherwise make every case here fail with someone else's 500s.
+PORT=${PORT:-8199}
+GUARD_PORT=${GUARD_PORT:-8198}
+FIXTURE_PORT=${FIXTURE_PORT:-8197}
 BASE="http://127.0.0.1:${PORT}/"
 WASM=target/wasm32-wasip2/release/mcp_server_template.wasm
 META='"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}'
@@ -148,6 +151,79 @@ if [ -n "$MS" ] && [ "$MS" -gt 1000000000000 ] 2>/dev/null; then
 else
   fail "current_time returns plausible epoch millis" "$OUT"
 fi
+
+echo "== default route (discovery) =="
+
+# The root path must serve a useful document, not 404/405: a browser, a load
+# balancer probe and a crawler all land here, and a client should be able to
+# see what the deployment offers without a protocol handshake.
+CODE=$(curl -sS --max-time 20 -o /tmp/mcp-e2e-root.json -w '%{http_code}' "http://127.0.0.1:${PORT}/")
+if [ "$CODE" = "200" ]; then
+  pass "GET / returns 200 (not a 404/405 dead end)"
+else
+  fail "GET / returns 200 (not a 404/405 dead end)" "http status: $CODE"
+fi
+ROOT=$(cat /tmp/mcp-e2e-root.json)
+assert_contains "GET / reports status ok" '"status": "ok"' "$ROOT"
+assert_contains "GET / names the MCP spec version" '2026-07-28' "$ROOT"
+assert_contains "GET / lists tool names" '"http_get"' "$ROOT"
+assert_contains "GET / points at the skill index" 'skill://index.json' "$ROOT"
+
+HDRS=$(curl -sS --max-time 20 -D - -o /dev/null "http://127.0.0.1:${PORT}/")
+assert_contains "GET / is served as JSON" 'application/json' "$HDRS"
+
+CODE=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/health")
+if [ "$CODE" = "200" ]; then
+  pass "GET /health returns 200"
+else
+  fail "GET /health returns 200" "http status: $CODE"
+fi
+
+# The discovery route must not shadow the protocol: POST still reaches the
+# transport on / and on the canonical /mcp path.
+OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' \
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${PORT}/mcp" -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
+assert_contains "POST /mcp serves the protocol" '"protocolVersion":"2026-07-28"' "$OUT"
+
+echo "== skills over MCP (resources) =="
+
+OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | mcp_post)
+assert_contains "initialize advertises the resources capability" '"resources"' "$OUT"
+
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"resources/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/list')
+assert_contains "resources/list contains the skill catalog" 'skill://index.json' "$OUT"
+assert_contains "resources/list contains the template SKILL.md" 'skill://mcp-server-template/SKILL.md' "$OUT"
+assert_contains "resources/list contains the skill's supporting file" 'skill://mcp-server-template/references/TOOLS.md' "$OUT"
+
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"resources/templates/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/templates/list')
+assert_contains "resources/templates/list exposes the skill URI template" 'skill://{skill}/SKILL.md' "$OUT"
+
+# skill://index.json — the lightweight catalog a client reads at session start.
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://index.json\",$META}}" \
+  | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://index.json')
+assert_contains "skill index declares the skills extension" 'io.modelcontextprotocol/skills' "$OUT"
+assert_contains "skill index lists the template skill" 'mcp-server-template' "$OUT"
+# The catalog's description is read from the SKILL.md frontmatter, not
+# duplicated in Rust — this asserts the two are actually joined up.
+assert_contains "skill index carries the frontmatter trigger description" 'Operate the mcp-server-template MCP server' "$OUT"
+
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://mcp-server-template/SKILL.md\",$META}}" \
+  | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://mcp-server-template/SKILL.md')
+assert_contains "SKILL.md is served as markdown" '"mimeType":"text/markdown"' "$OUT"
+assert_contains "SKILL.md body is the playbook" 'Using the mcp-server-template MCP server' "$OUT"
+
+# Relative links inside a SKILL.md resolve against the skill root.
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://mcp-server-template/references/TOOLS.md\",$META}}" \
+  | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://mcp-server-template/references/TOOLS.md')
+assert_contains "supporting file resolves under the skill root" 'Tool reference' "$OUT"
+
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://no-such-skill/SKILL.md\",$META}}" \
+  | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://no-such-skill/SKILL.md')
+# SEP-2164: rmcp reports resource-not-found as the standard -32602 to peers on
+# 2026-07-28+, and only as -32002 to older ones. Assert the code the current
+# spec revision actually puts on the wire, plus our own message.
+assert_contains "unknown skill URI is a clean resource-not-found" '-32602' "$OUT"
+assert_contains "unknown skill URI points the client at the catalog" 'read skill://index.json' "$OUT"
 
 echo "== spec enforcement =="
 
