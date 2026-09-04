@@ -53,6 +53,21 @@ Workload manifest, and would let `mcp.ai/auth-type` labels drive host behavior
 declaratively. Doesn't exist today; sketching it here as the direction that
 matches how Desktop already handles secrets and `allowedHosts`.
 
+## The discovery route
+
+`GET /` and `GET /health` are answered by the component before the MCP
+transport and outside the `MCP_ALLOWED_HOSTS` guard, so a health probe works
+under whatever `Host` it sends (see `src/discovery.rs`). Whichever option
+above you adopt, decide deliberately whether that route stays open:
+
+- It carries only what a successful `initialize` would — server name and
+  version, spec revision, tool names, skill names — and no CORS headers, so a
+  browser page cannot read it cross-origin.
+- Under **A**, an ingress that requires a bearer token on every path will also
+  gate `/`; exempt it if you want unauthenticated liveness checks.
+- Under **B**, tighten `discovery::document` (or drop the tool/skill lists) if
+  the deployment treats the tool inventory itself as sensitive.
+
 ## Recommendation
 
 Default the template to **A** (platform-terminated, identity via headers),

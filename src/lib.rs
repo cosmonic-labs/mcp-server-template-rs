@@ -12,10 +12,17 @@
 //! and [`bridge::outbound`] for how tool code performs outbound HTTP through
 //! the `wasi:http` client bindings.
 //!
+//! Two things are served besides the protocol itself: a discovery document on
+//! the default route (see [`discovery`]) so `GET /` is useful rather than a
+//! dead end, and **skills** — natural-language playbooks published over the
+//! MCP resources primitive (see [`skills`]).
+//!
 //! [`wasi:http/handler@0.3.0`]: https://github.com/WebAssembly/wasi-http
 
 pub mod bridge;
+mod discovery;
 mod server;
+pub mod skills;
 mod telemetry;
 
 use std::pin::Pin;
@@ -43,6 +50,16 @@ impl wasip3::exports::http::handler::Guest for Component {
         let max_body = config.max_request_body_bytes;
 
         let request = http_from_wasi_request(request)?;
+
+        // Default route. Answered before the transport, the request lock, and
+        // the body read: a health probe must never queue behind an in-flight
+        // MCP exchange. Every other request — including every POST — falls
+        // through to the MCP transport unchanged.
+        if discovery::matches(&request) {
+            let body = discovery::document(&server::TemplateServer::tool_names());
+            return static_response(200, "application/json", body);
+        }
+
         let (parts, body) = request.into_parts();
 
         // Buffer the request body in component-model context — an MCP request
@@ -193,19 +210,34 @@ fn transport_config() -> StreamableHttpServerConfig {
 /// Builds a plain-text `413 Payload Too Large` response without involving the
 /// MCP transport (the request was rejected before it could be parsed).
 fn payload_too_large(limit: usize) -> Result<Response, ErrorCode> {
-    let headers = Fields::from_list(&[(
-        "content-type".to_string(),
-        b"text/plain; charset=utf-8".to_vec(),
-    )])
+    static_response(
+        413,
+        "text/plain; charset=utf-8",
+        format!("Payload Too Large: request body exceeds {limit} bytes"),
+    )
+}
+
+/// Builds a complete, already-known response body — used for the routes this
+/// component answers itself rather than handing to the MCP transport.
+///
+/// The body still goes out through a spawned writer because `wasi:http`
+/// responses are always streamed; there is simply nothing to wait for between
+/// frames.
+fn static_response(status: u16, content_type: &str, body: String) -> Result<Response, ErrorCode> {
+    let headers = Fields::from_list(&[
+        ("content-type".to_string(), content_type.as_bytes().to_vec()),
+        // No CORS headers anywhere in this component, deliberately: a browser
+        // page must not be able to read any of it cross-origin.
+        ("cache-control".to_string(), b"no-store".to_vec()),
+    ])
     .map_err(|err| ErrorCode::InternalError(Some(format!("invalid headers: {err}"))))?;
     let (mut writer, body_rx, result_rx) = BodyWriter::new();
     let (response, _transmit) = Response::new(headers, Some(body_rx), result_rx);
     response
-        .set_status_code(413)
+        .set_status_code(status)
         .map_err(|()| ErrorCode::InternalError(Some("invalid status code".into())))?;
     wasip3::wit_bindgen::spawn(async move {
-        let message = format!("Payload Too Large: request body exceeds {limit} bytes");
-        let frame = http_body::Frame::data(bytes::Bytes::from(message));
+        let frame = http_body::Frame::data(bytes::Bytes::from(body));
         let _ = writer.send_frame(frame).await;
         drop(writer.stream_writer);
         let _ = writer.result_writer.write(Ok(None)).await;

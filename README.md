@@ -19,6 +19,12 @@ Template for building **Model Context Protocol (MCP) servers** as
 - **Outbound HTTP for tools**: `bridge::outbound::fetch` performs requests
   directly over the `wasi:http@0.3.0` client bindings, governed by the
   workload's `allowedHosts` policy (deny-all by default).
+- **Skills over MCP**: the server ships the manual with the product. A
+  `SKILL.md` playbook is embedded in the component and published over the
+  resources primitive under `skill://` URIs, so a connected agent learns *when*
+  and *how* to use the tools — see [Skills over MCP](#skills-over-mcp).
+- **A useful default route**: `GET /` returns a JSON discovery/health document
+  instead of a 404 — see [The default route](#the-default-route).
 - **Enterprise observability**: `tracing` spans with structured JSON logs,
   W3C `traceparent` correlation, OTLP export via the host, and an opt-in
   `wasi-otel` feature for native host-joined traces (see
@@ -31,10 +37,17 @@ Template for building **Model Context Protocol (MCP) servers** as
 ├── .wash/config.yaml    # wash v2 / Cosmonic Desktop project config
 ├── deploy/workload.yaml # deploy manifest for the published image (mcp.ai labels)
 ├── docs/auth.md         # authorization options for the Desktop use-case
+├── skills/
+│   ├── mcp-server-template/  # the skill this SERVER serves to its clients
+│   │   ├── SKILL.md          #   the playbook — rename + rewrite when you fork
+│   │   └── references/       #   supporting files, pulled in on demand
+│   └── building-mcp-servers/ # guidance for YOUR coding agent, never served
 ├── src/
-│   ├── lib.rs           # wasi:http/handler export, streaming response pump
+│   ├── lib.rs           # wasi:http/handler export, routing, response pump
 │   ├── bridge.rs        # tokio ↔ component-model-async bridge + outbound HTTP
+│   ├── discovery.rs     # the GET / discovery + health document
 │   ├── server.rs        # ServerHandler + your tools — start here
+│   ├── skills.rs        # Skills over MCP: embedded skills as skill:// resources
 │   └── telemetry.rs     # tracing/OTEL wiring
 └── workload.yaml        # local-dev Workload manifest (built-in registry)
 ```
@@ -138,9 +151,71 @@ data: {"jsonrpc":"2.0","id":3,"result":{"resultType":"complete","content":[{"typ
 Responses arrive SSE-framed (`Content-Type: text/event-stream`, `data:`
 lines) — the transport's default, which lets long-running tools stream
 progress. Any MCP client that speaks streamable HTTP handles this (and the
-headers above) for you. Only POST is served: GET/DELETE return 405, and there
-are deliberately no CORS headers — browser pages cannot call the server
-cross-origin, which is part of the DNS-rebinding defense.
+headers above) for you. POST reaches the transport on any path (`/mcp` is the
+canonical one; `/` is kept working for the Desktop ingress and existing
+clients); GET is served only on the discovery routes below, and DELETE returns
+405. There are deliberately no CORS headers anywhere — browser pages cannot
+read any response cross-origin, which is part of the DNS-rebinding defense.
+
+### The default route
+
+`GET /` (and `GET /health`) return a JSON discovery document rather than a
+404: status, server name and version, the MCP revision spoken, endpoint paths,
+tool names, and the skills served.
+
+```console
+$ curl -s http://mcp-server.localhost:8200/ | jq '.status, .capabilities.tools'
+"ok"
+["add","current_time","echo","http_get"]
+```
+
+The MCP specification does not mandate a root-path response, but a dead end
+there is a poor default: browsers, load-balancer probes and crawlers all land
+on `/`, and a client should be able to ask what a deployment offers without
+completing a protocol handshake. Protocol traffic stays on POST, so the two
+never interfere.
+
+This route is deliberately outside the `MCP_ALLOWED_HOSTS` guard so health
+checks work under whatever `Host` a probe sends. It exposes only what a
+successful `initialize` would, and with no CORS headers a browser page cannot
+read it cross-origin.
+
+## Skills over MCP
+
+Tools are the hands; a **skill** is the manual. Every server built from this
+template publishes at least one — a natural-language playbook telling a
+connected agent when to reach for the server, how to sequence its tools, and
+how to read its errors. Skills ride on the MCP **resources** primitive
+(`io.modelcontextprotocol/skills`), so no new protocol surface is involved:
+
+| URI | What it is |
+|---|---|
+| `skill://index.json` | Lightweight catalog — skill names and their trigger descriptions. Clients read this once at session start. |
+| `skill://<name>/SKILL.md` | The full playbook. Pulled into context only when a request matches the skill's description. |
+| `skill://<name>/<path>` | Supporting files. A relative link in a `SKILL.md` (`[Tools](references/TOOLS.md)`) resolves here. |
+
+That progressive disclosure is the point: the catalog costs a few hundred
+tokens, and the full playbook is only loaded when it is relevant.
+
+```console
+$ curl -s -X POST http://mcp-server.localhost:8200/mcp \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -H 'MCP-Protocol-Version: 2026-07-28' \
+    -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://index.json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"skill://index.json","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+```
+
+Files live under `skills/<name>/` and are embedded with `include_str!`, so the
+component stays self-contained and a playbook can never drift from the build
+it documents. To add or rename one, edit the `SKILLS` table in
+[`src/skills.rs`](src/skills.rs); the catalog's name and description are read
+straight from the `SKILL.md` YAML frontmatter, so there is one place to edit
+them (keep `name` and `description` on a single line each — the frontmatter
+reader is deliberately not a full YAML parser).
+
+`skills/building-mcp-servers/` is **not** served: it is guidance for the coding
+agent building a server from this template, not for the server's clients.
 
 ## Writing your own tools
 
@@ -207,10 +282,12 @@ owns OTLP export; the component emits structured, correlatable signals.**
 ## Testing
 
 `scripts/e2e.sh` builds the component and runs the full protocol suite
-against it under `wasmtime serve` — spec conformance, streaming, the outbound
-bridge (against a local fixture server, including a black-holed upstream),
-the Host-header guard, the SSRF guard, oversized bodies, and concurrency. CI
-runs it on every push. Note that `.cargo/config.toml` defaults the build
+against it under `wasmtime serve` — spec conformance, streaming, the discovery
+route, the `skill://` resources, the outbound bridge (against a local fixture
+server, including a black-holed upstream), the Host-header guard, the SSRF
+guard, oversized bodies, and concurrency. CI runs it on every push. `PORT`,
+`GUARD_PORT` and `FIXTURE_PORT` are overridable when another project's suite
+is already holding the defaults. Note that `.cargo/config.toml` defaults the build
 target to wasm32-wasip2, so plain `cargo test` would build (unrunnable) wasm
 test binaries — the e2e harness is the test entry point.
 
