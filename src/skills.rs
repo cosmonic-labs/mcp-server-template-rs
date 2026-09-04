@@ -23,11 +23,15 @@
 //! self-contained: no filesystem, no network, and the playbook version can
 //! never drift from the tool implementation it documents.
 //!
-//! ## Adding or renaming a skill
+//! ## Adding a skill
 //!
-//! Put it under `skills/<name>/SKILL.md` (plus any supporting files) and add
-//! an entry to [`SKILLS`]. The catalog's name and description come from the
-//! `SKILL.md` YAML frontmatter, so there is exactly one place to edit them.
+//! Put it under `skills/<dir>/SKILL.md` (plus any supporting files) and add an
+//! entry to [`SKILLS`]. The catalog's description comes from the `SKILL.md`
+//! YAML frontmatter, so there is exactly one place to edit it.
+//!
+//! Directory names are fixed at build time (`include_str!`), but the skill's
+//! *name* — the authority in its URIs — is [`env!("CARGO_PKG_NAME")`] for this
+//! server's own skill, so renaming the package renames the skill with it.
 
 use rmcp::model::{Resource, ResourceTemplate};
 
@@ -58,8 +62,9 @@ pub struct SkillFile {
 
 /// One skill: a `SKILL.md` playbook and its supporting files.
 pub struct Skill {
-    /// Skill name; the authority segment of its URIs. Keep it equal to the
-    /// `name` in the frontmatter and to the directory under `skills/`.
+    /// Skill name; the authority segment of its URIs. The server's own skill
+    /// takes the package name, so the skill's identity always equals the
+    /// server's and neither can drift from the other on a rename.
     pub name: &'static str,
     /// The playbook itself, served at `skill://<name>/SKILL.md`. Held as its
     /// own field rather than as one of `files` so a skill structurally cannot
@@ -71,16 +76,18 @@ pub struct Skill {
 
 /// Skills this server serves.
 ///
-/// Replace the template's skill with your own when you fork; the
-/// `building-mcp-servers` skill that also lives under `skills/` is guidance
-/// for *authoring* a server and is deliberately **not** listed here — it is
-/// for the developer's coding agent, not for this server's clients.
+/// `skills/server/` is this server's own manual — rewrite its contents for
+/// your server; nothing here needs renaming, since the skill takes the
+/// package name. The `building-mcp-servers` skill that also lives under
+/// `skills/` is guidance for *authoring* a server and is deliberately **not**
+/// listed here — it is for the developer's coding agent, not for this
+/// server's clients.
 pub static SKILLS: &[Skill] = &[Skill {
-    name: "mcp-server-template",
-    skill_md: include_str!("../skills/mcp-server-template/SKILL.md"),
+    name: env!("CARGO_PKG_NAME"),
+    skill_md: include_str!("../skills/server/SKILL.md"),
     files: &[SkillFile {
         path: "references/TOOLS.md",
-        text: include_str!("../skills/mcp-server-template/references/TOOLS.md"),
+        text: include_str!("../skills/server/references/TOOLS.md"),
         mime_type: "text/markdown",
     }],
 }];

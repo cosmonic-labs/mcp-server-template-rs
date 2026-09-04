@@ -10,13 +10,14 @@ THIS FILE IS SERVED TO CLIENTS over MCP as `skill://mcp-server-template/SKILL.md
 (Skills over MCP, `io.modelcontextprotocol/skills`). It is embedded into the
 component at compile time by `src/skills.rs`.
 
-When you fork this template:
-  1. rename this directory to your server's skill name,
-  2. rewrite the frontmatter `name` + `description` (the description is the
-     trigger text clients match against — say WHEN to use the server, not just
-     what it is),
-  3. replace the body with your server's operating knowledge, and
-  4. update the `SKILLS` table in `src/skills.rs` to point at the new paths.
+The skill's URI name is the package name from Cargo.toml, so this directory
+never needs renaming. When you fork this template:
+  1. rewrite the frontmatter `name` (match Cargo.toml) + `description` — the
+     description is the trigger text clients match against, so say WHEN to use
+     the server, not just what it is,
+  2. replace the body with your server's operating knowledge, and
+  3. add any supporting files to `references/` and list them in the `SKILLS`
+     table in `src/skills.rs`.
 Delete this comment block when you do.
 -->
 

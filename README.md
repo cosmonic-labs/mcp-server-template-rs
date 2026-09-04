@@ -38,8 +38,8 @@ Template for building **Model Context Protocol (MCP) servers** as
 ├── deploy/workload.yaml # deploy manifest for the published image (mcp.ai labels)
 ├── docs/auth.md         # authorization options for the Desktop use-case
 ├── skills/
-│   ├── mcp-server-template/  # the skill this SERVER serves to its clients
-│   │   ├── SKILL.md          #   the playbook — rename + rewrite when you fork
+│   ├── server/               # the skill this SERVER serves to its clients
+│   │   ├── SKILL.md          #   the playbook — rewrite it when you fork
 │   │   └── references/       #   supporting files, pulled in on demand
 │   └── building-mcp-servers/ # guidance for YOUR coding agent, never served
 ├── src/
@@ -206,13 +206,16 @@ $ curl -s -X POST http://mcp-server.localhost:8200/mcp \
     -d '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"skill://index.json","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-Files live under `skills/<name>/` and are embedded with `include_str!`, so the
+Files live under `skills/` and are embedded with `include_str!`, so the
 component stays self-contained and a playbook can never drift from the build
-it documents. To add or rename one, edit the `SKILLS` table in
-[`src/skills.rs`](src/skills.rs); the catalog's name and description are read
-straight from the `SKILL.md` YAML frontmatter, so there is one place to edit
-them (keep `name` and `description` on a single line each — the frontmatter
-reader is deliberately not a full YAML parser).
+it documents. `skills/server/` is this server's own manual: rewrite its
+contents when you fork — the directory needs no rename, because the skill's
+URI name is the package name (`skill://<your-crate>/SKILL.md`). To add another
+skill, or supporting files to this one, edit the `SKILLS` table in
+[`src/skills.rs`](src/skills.rs); the catalog's description is read straight
+from the `SKILL.md` YAML frontmatter, so there is one place to edit it (keep
+`name` and `description` on a single line each — the frontmatter reader is
+deliberately not a full YAML parser).
 
 `skills/building-mcp-servers/` is **not** served: it is guidance for the coding
 agent building a server from this template, not for the server's clients.
