@@ -199,6 +199,7 @@ on the resources primitive:
 | `skill://<name>/<path>` | Supporting files, via `resources/read`. A relative link in a `SKILL.md` (`[Tools](references/TOOLS.md)`) resolves here, and every such URI is in the manifest. |
 | `resources/directory/read` `{uri}` | Direct children of `skill://<name>` or any subdirectory (`inode/directory` for subdirectories). |
 | `instructions` | The same names and trigger descriptions as text — what a client without the extension (every Claude surface today) sees, in its system prompt, before its first tool call. |
+| `skill://index.json` | The same entries as a resource — URIs and digest manifests included — for a client that reads resources but has no `skills/list`. |
 
 That progressive disclosure is the point: the listing costs a few hundred
 tokens, and the full playbook is only loaded when it is relevant. The manifest

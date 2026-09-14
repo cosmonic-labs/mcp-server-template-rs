@@ -168,6 +168,7 @@ assert_contains "GET / reports status ok" '"status": "ok"' "$ROOT"
 assert_contains "GET / names the MCP spec version" '2026-07-28' "$ROOT"
 assert_contains "GET / lists tool names" '"http_get"' "$ROOT"
 assert_contains "GET / declares the skills extension" 'io.modelcontextprotocol/skills' "$ROOT"
+assert_contains "GET / points at the skill index" 'skill://index.json' "$ROOT"
 
 HDRS=$(curl -sS --max-time 20 -D - -o /dev/null "http://127.0.0.1:${PORT}/")
 assert_contains "GET / is served as JSON" 'application/json' "$HDRS"
@@ -193,6 +194,7 @@ assert_contains "initialize declares the skills extension" '"io.modelcontextprot
 # The catalog a client WITHOUT the extension sees: the skill and its trigger
 # description, in the instructions, before its first tool call.
 assert_contains "instructions carry the skill catalog" '- mcp-server-template: Operate the mcp-server-template MCP server' "$OUT"
+assert_contains "instructions name the skill index resource" 'skill://index.json' "$OUT"
 
 # The stateless 2026-07-28 handshake serves the same declaration.
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"server/discover\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: server/discover')
@@ -263,12 +265,21 @@ OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"resources/directo
 assert_contains "directory read of a file is -32602" '-32602' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"resources/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/list')
+assert_contains "resources/list contains the skill catalog" 'skill://index.json' "$OUT"
 assert_contains "resources/list contains the server SKILL.md" 'skill://mcp-server-template/SKILL.md' "$OUT"
 # The manifest enumerates the supporting files; the resource list does not.
 assert_not_contains "resources/list does not list the supporting files" 'skill://mcp-server-template/references/TOOLS.md' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"resources/templates/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/templates/list')
 assert_contains "resources/templates/list exposes the skill URI template" 'skill://{skill}/SKILL.md' "$OUT"
+
+# skill://index.json — the catalog as a resource, a mirror of skills/list for
+# a client that reads resources but has no skills/list.
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://index.json\",$META}}" \
+  | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://index.json')
+assert_contains "skill index declares the skills extension" 'io.modelcontextprotocol/skills' "$OUT"
+assert_contains "skill index carries the frontmatter trigger description" 'Operate the mcp-server-template MCP server' "$OUT"
+assert_contains "skill index carries the manifest digests" 'sha256:' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://mcp-server-template/SKILL.md\",$META}}" \
   | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://mcp-server-template/SKILL.md')

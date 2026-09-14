@@ -324,8 +324,9 @@ impl ServerHandler for TemplateServer {
         Ok(CustomResult::new(result))
     }
 
-    /// Skills over MCP: one `SKILL.md` resource per skill. Supporting files
-    /// are enumerated by the manifest (`skills/list`), not here.
+    /// Skills over MCP: the catalog and one `SKILL.md` resource per skill.
+    /// Supporting files are enumerated by the manifest (`skills/list`), not
+    /// here.
     ///
     /// The whole set is returned in one page — a server embedding enough
     /// skills for that to be unwieldy should honour `request.cursor` and set
@@ -362,8 +363,9 @@ impl ServerHandler for TemplateServer {
             // for a skill file the server does not serve.
             ErrorData::resource_not_found(
                 format!(
-                    "no resource at {}; skills/list enumerates the skills this server serves",
-                    request.uri
+                    "no resource at {}; skills/list (or {}) enumerates the skills this server serves",
+                    request.uri,
+                    skills::INDEX_URI
                 ),
                 None,
             )

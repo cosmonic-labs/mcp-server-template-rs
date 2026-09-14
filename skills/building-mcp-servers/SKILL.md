@@ -170,7 +170,7 @@ primitive:
 
 | URI | Content |
 |---|---|
-| `skills/list` / `skills/get` | The extension's catalog: each skill's `SKILL.md` URI, its frontmatter verbatim, and a manifest with a SHA-256 digest and size per file. Generated from `SKILLS`; clients read it once at session start. The same names + descriptions ride in `instructions` for clients without the extension (every Claude surface today). |
+| `skills/list` / `skills/get` | The extension's catalog: each skill's `SKILL.md` URI, its frontmatter verbatim, and a manifest with a SHA-256 digest and size per file. Generated from `SKILLS`; clients read it once at session start. The same names + descriptions ride in `instructions` for clients without the extension (every Claude surface today), and the same entries are the `skill://index.json` resource for clients that read resources but surface neither. |
 | `skill://<name>/SKILL.md` | The playbook, via `resources/read`. Read only when the description matches the task. |
 | `skill://<name>/<path>` | Supporting files, via `resources/read`. A relative link in the SKILL.md resolves here. `resources/directory/read` lists a directory. |
 

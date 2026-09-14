@@ -28,10 +28,12 @@
 //!
 //! Discovery is progressive:
 //!
-//! 1. A client reads the listing once at session start — `skills/list`, or,
-//!    for a client without the extension (every Claude surface as of this
-//!    writing), the same names and trigger descriptions in the server's
-//!    `instructions` ([`catalog`]), which a host puts in the system prompt.
+//! 1. A client reads the listing once at session start — `skills/list`; or,
+//!    without the extension, the same names and trigger descriptions in the
+//!    server's `instructions` ([`catalog`], what a Claude client sees in its
+//!    system prompt), or the same entries as the [`INDEX_URI`] resource for a
+//!    client that reads resources but surfaces neither. One catalog, three
+//!    channels, all generated from the same entries.
 //! 2. Only when a request matches does it read `skill://<name>/SKILL.md` —
 //!    the full playbook.
 //! 3. Relative paths inside a `SKILL.md` resolve against the skill root, so
@@ -79,6 +81,10 @@ pub const DIRECTORY_MIME: &str = "inode/directory";
 
 /// The `_meta` key prefix reserved for skill resources by the extension.
 const META_PREFIX: &str = "io.modelcontextprotocol.skills/";
+
+/// URI of the catalog as a resource — the same entries as `skills/list`, for
+/// a client that reads resources but has no `skills/list`.
+pub const INDEX_URI: &str = "skill://index.json";
 
 /// Scheme prefix for every skill resource URI.
 const SCHEME: &str = "skill://";
@@ -244,7 +250,8 @@ pub fn entry(uri: &str) -> Option<&'static Value> {
 pub fn catalog() -> String {
     let mut out = String::from(
         "Skills this server publishes (io.modelcontextprotocol/skills: `skills/list` and \
-         `skills/get`; each playbook is the `skill://<name>/SKILL.md` resource and names its \
+         `skills/get`; the same catalog with URIs and digests is the `skill://index.json` \
+         resource; each playbook is the `skill://<name>/SKILL.md` resource and names its \
          supporting files relative to that root):\n",
     );
     for skill in SKILLS {
@@ -257,8 +264,32 @@ pub fn catalog() -> String {
     out
 }
 
-/// The skill resources for `resources/list`: one `SKILL.md` per skill, with
-/// the metadata the extension prescribes — `name`
+/// The catalog at [`INDEX_URI`]: the same entries `skills/list` returns,
+/// wrapped for a client that reads it as a resource. Built on every read
+/// rather than stored, so it cannot fall out of step with the files.
+pub fn index_json() -> String {
+    let index = json!({
+        "schemaVersion": "2",
+        "extension": EXTENSION_ID,
+        "server": {
+            "name": env!("CARGO_PKG_NAME"),
+            "version": env!("CARGO_PKG_VERSION"),
+        },
+        "usage": "The same entries as this server's `skills/list` (io.modelcontextprotocol/skills), \
+                  for a client without the extension. Each entry is one skill: its SKILL.md `uri`, \
+                  its `frontmatter` (the `description` is what a task is matched against), and \
+                  `resources` — every file of the skill with its SHA-256 digest and size. A \
+                  relative path a playbook names resolves to skill://<skill>/<that path>, and \
+                  every such URI is in `resources`.",
+        "skills": entries(),
+    });
+    // Owned data cannot fail to serialize, but never panic in a component: a
+    // trap kills the instance.
+    serde_json::to_string_pretty(&index).unwrap_or_else(|_| String::from(r#"{"skills":[]}"#))
+}
+
+/// The skill resources for `resources/list`: the catalog and one `SKILL.md`
+/// per skill, with the metadata the extension prescribes — `name`
 /// and `description` from the frontmatter, `text/markdown`, and the remaining
 /// frontmatter fields under `_meta` with the reserved prefix.
 ///
@@ -266,7 +297,15 @@ pub fn catalog() -> String {
 /// them with digests, `resources/directory/read` walks them, and they are
 /// readable by URI.
 pub fn resources() -> Vec<Resource> {
-    let mut resources = Vec::with_capacity(SKILLS.len());
+    let mut resources = vec![Resource::new(INDEX_URI, "skill-index")
+        .with_title("Skill catalog")
+        .with_description(
+            "The skills this server publishes — the same entries as `skills/list`, for a \
+             client without the io.modelcontextprotocol/skills extension: each skill's \
+             SKILL.md URI, its frontmatter (name and trigger description), and its file \
+             manifest with SHA-256 digests.",
+        )
+        .with_mime_type("application/json")];
     for skill in SKILLS {
         let mut meta = JsonObject::new();
         for (key, value) in skill.frontmatter() {
@@ -294,8 +333,8 @@ pub fn resource_templates() -> Vec<ResourceTemplate> {
         ResourceTemplate::new("skill://{skill}/SKILL.md", "skill-playbook")
             .with_title("Skill playbook")
             .with_description(
-                "The SKILL.md of a named skill. Skill names come from skills/list, and from \
-                 the catalog in this server's instructions.",
+                "The SKILL.md of a named skill. Skill names come from skills/list, the \
+                 skill://index.json catalog, or this server's instructions.",
             )
             .with_mime_type("text/markdown"),
         ResourceTemplate::new("skill://{skill}/{+path}", "skill-file")
@@ -310,6 +349,9 @@ pub fn resource_templates() -> Vec<ResourceTemplate> {
 /// Resolves a `skill://` URI to `(mime_type, contents)`, or `None` if this
 /// server serves nothing at that URI.
 pub fn read(uri: &str) -> Option<(&'static str, String)> {
+    if uri == INDEX_URI {
+        return Some(("application/json", index_json()));
+    }
     let (name, path) = uri.strip_prefix(SCHEME)?.split_once('/')?;
     let skill = SKILLS.iter().find(|skill| skill.name == name)?;
     if path == ENTRY {
@@ -455,7 +497,7 @@ mod tests {
         assert!(entry(&skill.root_uri()).is_none());
         assert!(entry(&skill.file_uri(&skill.files[0])).is_none());
         assert!(entry("skill://nope/SKILL.md").is_none());
-        assert!(entry("skill://index.json").is_none());
+        assert!(entry(INDEX_URI).is_none());
     }
 
     #[test]
@@ -464,13 +506,21 @@ mod tests {
         for skill in SKILLS {
             assert!(text.contains(&format!("- {}: {}", skill.name, skill.description())));
         }
-        assert!(text.contains("skills/list"));
+        assert!(text.contains("skills/list") && text.contains(INDEX_URI));
     }
 
     #[test]
-    fn resources_list_is_one_playbook_per_skill() {
+    fn the_index_is_listed_and_mirrors_skills_list() {
+        let index: Value = serde_json::from_str(&index_json()).unwrap();
+        assert_eq!(index["extension"], EXTENSION_ID);
+        assert_eq!(index["skills"], Value::Array(entries()));
+        assert!(resources().iter().any(|r| r.uri == INDEX_URI));
+    }
+
+    #[test]
+    fn resources_list_is_the_catalog_plus_one_playbook_per_skill() {
         let listed = resources();
-        assert_eq!(listed.len(), SKILLS.len());
+        assert_eq!(listed.len(), SKILLS.len() + 1);
         for r in &listed {
             let (mime, body) = read(&r.uri).expect("listed but unreadable");
             assert!(!body.is_empty());
@@ -492,7 +542,7 @@ mod tests {
             format!("{}/nope", skill.root_uri()),
             format!("{}/../x", skill.root_uri()),
             "skill://nope".into(),
-            "skill://index.json".into(),
+            INDEX_URI.into(),
         ] {
             assert!(directory(&uri).is_none(), "{uri} read as a directory");
         }
