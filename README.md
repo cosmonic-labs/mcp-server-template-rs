@@ -185,25 +185,34 @@ read it cross-origin.
 Tools are the hands; a **skill** is the manual. Every server built from this
 template publishes at least one — a natural-language playbook telling a
 connected agent when to reach for the server, how to sequence its tools, and
-how to read its errors. Skills ride on the MCP **resources** primitive
-(`io.modelcontextprotocol/skills`), so no new protocol surface is involved:
+how to read its errors — through the MCP **Skills extension**
+(`io.modelcontextprotocol/skills`, MCP 2026-07-28,
+[ext-skills](https://github.com/modelcontextprotocol/ext-skills)), which rides
+on the resources primitive:
 
-| URI | What it is |
+| Wire surface | What it is |
 |---|---|
-| `skill://index.json` | Lightweight catalog — skill names and their trigger descriptions. Clients read this once at session start. |
-| `skill://<name>/SKILL.md` | The full playbook. Pulled into context only when a request matches the skill's description. |
-| `skill://<name>/<path>` | Supporting files. A relative link in a `SKILL.md` (`[Tools](references/TOOLS.md)`) resolves here. |
+| `capabilities.extensions["io.modelcontextprotocol/skills"]` | `{ "directoryRead": true }`, declared beside `resources` in `initialize` and `server/discover`. |
+| `skills/list` | One `Skill` entry per skill: its `SKILL.md` `uri`, its YAML `frontmatter` verbatim, and a complete `resources` manifest with a `sha256:` digest and byte `size` per file. Clients read this once at session start. |
+| `skills/get` `{uri}` | The same entry for one `SKILL.md` URI; `-32602` for anything else. |
+| `skill://<name>/SKILL.md` | The full playbook, via `resources/read`. Pulled into context only when a request matches the skill's description. |
+| `skill://<name>/<path>` | Supporting files, via `resources/read`. A relative link in a `SKILL.md` (`[Tools](references/TOOLS.md)`) resolves here, and every such URI is in the manifest. |
+| `resources/directory/read` `{uri}` | Direct children of `skill://<name>` or any subdirectory (`inode/directory` for subdirectories). |
+| `instructions` | The same names and trigger descriptions as text — what a client without the extension (every Claude surface today) sees, in its system prompt, before its first tool call. |
+| `skill://index.json` | The same entries as a resource — URIs and digest manifests included — for a client that reads resources but has no `skills/list`. |
 
-That progressive disclosure is the point: the catalog costs a few hundred
-tokens, and the full playbook is only loaded when it is relevant.
+That progressive disclosure is the point: the listing costs a few hundred
+tokens, and the full playbook is only loaded when it is relevant. The manifest
+is what a host binds user approval to and verifies every read against, so it
+is computed from the same embedded bytes `resources/read` serves.
 
 ```console
 $ curl -s -X POST http://mcp-server.localhost:8200/mcp \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H 'MCP-Protocol-Version: 2026-07-28' \
-    -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://index.json' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"skill://index.json","_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+    -H 'Mcp-Method: skills/list' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"skills/list","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
 Files live under `skills/` and are embedded with `include_str!`, so the
@@ -212,10 +221,10 @@ it documents. `skills/server/` is this server's own manual: rewrite its
 contents when you fork — the directory needs no rename, because the skill's
 URI name is the package name (`skill://<your-crate>/SKILL.md`). To add another
 skill, or supporting files to this one, edit the `SKILLS` table in
-[`src/skills.rs`](src/skills.rs); the catalog's description is read straight
-from the `SKILL.md` YAML frontmatter, so there is one place to edit it (keep
-`name` and `description` on a single line each — the frontmatter reader is
-deliberately not a full YAML parser).
+[`src/skills.rs`](src/skills.rs); the entry's frontmatter is parsed straight
+from the `SKILL.md` YAML block, so there is one place to edit it, and the
+extension requires its `name` to equal the last segment of the skill's URI path
+(which the package name satisfies).
 
 `skills/building-mcp-servers/` is **not** served: it is guidance for the coding
 agent building a server from this template, not for the server's clients.

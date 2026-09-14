@@ -167,6 +167,7 @@ ROOT=$(cat /tmp/mcp-e2e-root.json)
 assert_contains "GET / reports status ok" '"status": "ok"' "$ROOT"
 assert_contains "GET / names the MCP spec version" '2026-07-28' "$ROOT"
 assert_contains "GET / lists tool names" '"http_get"' "$ROOT"
+assert_contains "GET / declares the skills extension" 'io.modelcontextprotocol/skills' "$ROOT"
 assert_contains "GET / points at the skill index" 'skill://index.json' "$ROOT"
 
 HDRS=$(curl -sS --max-time 20 -D - -o /dev/null "http://127.0.0.1:${PORT}/")
@@ -185,27 +186,100 @@ OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"prot
   | curl -sS --max-time 20 -X POST "http://127.0.0.1:${PORT}/mcp" -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
 assert_contains "POST /mcp serves the protocol" '"protocolVersion":"2026-07-28"' "$OUT"
 
-echo "== skills over MCP (resources) =="
+echo "== skills over MCP (io.modelcontextprotocol/skills) =="
 
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | mcp_post)
 assert_contains "initialize advertises the resources capability" '"resources"' "$OUT"
+assert_contains "initialize declares the skills extension" '"io.modelcontextprotocol/skills":{"directoryRead":true}' "$OUT"
+# The catalog a client WITHOUT the extension sees: the skill and its trigger
+# description, in the instructions, before its first tool call.
+assert_contains "instructions carry the skill catalog" '- mcp-server-template: Operate the mcp-server-template MCP server' "$OUT"
+assert_contains "instructions name the skill index resource" 'skill://index.json' "$OUT"
+
+# The stateless 2026-07-28 handshake serves the same declaration.
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"server/discover\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: server/discover')
+assert_contains "server/discover declares the skills extension" '"io.modelcontextprotocol/skills":{"directoryRead":true}' "$OUT"
+
+# skills/list — every skill as a complete entry: verbatim frontmatter plus a
+# manifest with a SHA-256 digest and byte size per file.
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":30,\"method\":\"skills/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: skills/list')
+assert_contains "skills/list is implemented" '"skills":[' "$OUT"
+assert_contains "skills/list carries resultType" '"resultType":"complete"' "$OUT"
+assert_contains "skills/list carries ttlMs" '"ttlMs":' "$OUT"
+assert_contains "skills/list carries cacheScope" '"cacheScope":"public"' "$OUT"
+assert_contains "skills/list names the server skill" '"uri":"skill://mcp-server-template/SKILL.md"' "$OUT"
+# The entry's frontmatter is read from the SKILL.md YAML, not duplicated in
+# Rust — this asserts the two are actually joined up.
+assert_contains "skills/list carries the frontmatter trigger description" 'Operate the mcp-server-template MCP server' "$OUT"
+assert_contains "skills/list carries a sha256 digest per file" '"digest":"sha256:' "$OUT"
+assert_contains "skills/list lists the supporting file in the manifest" '"uri":"skill://mcp-server-template/references/TOOLS.md"' "$OUT"
+
+# The manifest must describe exactly the bytes resources/read serves.
+DIGEST_OK=$(printf '%s' "$OUT" | python3 -c '
+import hashlib, json, subprocess, sys
+# The transport answers as SSE (`data: {...}`) or bare JSON; take the JSON.
+def payload(text):
+    lines = [l[len("data: "):] for l in text.splitlines() if l.startswith("data: ")]
+    return json.loads(lines[-1] if lines else text)
+listing = payload(sys.stdin.read())["result"]
+base, meta = sys.argv[1], json.loads(sys.argv[2])
+bad = []
+for skill in listing["skills"]:
+    for f in skill["resources"]:
+        body = json.dumps({"jsonrpc": "2.0", "id": 31, "method": "resources/read",
+                           "params": dict(uri=f["uri"], **meta)})
+        out = subprocess.run(["curl", "-sS", "--max-time", "20", "-X", "POST", base,
+                              "-H", "Content-Type: application/json",
+                              "-H", "Accept: application/json, text/event-stream",
+                              "-H", "MCP-Protocol-Version: 2026-07-28",
+                              "-H", "Mcp-Method: resources/read", "-H", "Mcp-Name: " + f["uri"],
+                              "--data-binary", body], capture_output=True, text=True).stdout
+        text = payload(out)["result"]["contents"][0]["text"]
+        raw = text.encode("utf-8")
+        if len(raw) != f["size"] or f["digest"] != "sha256:" + hashlib.sha256(raw).hexdigest():
+            bad.append(f["uri"])
+print("ok" if not bad else "mismatch: " + " ".join(bad))
+' "$BASE" "{$META}" 2>&1)
+if [ "$DIGEST_OK" = "ok" ]; then
+  pass "every manifest digest and size matches what resources/read serves"
+else
+  fail "every manifest digest and size matches what resources/read serves" "$DIGEST_OK"
+fi
+
+# skills/get — the same entry by URI; -32602 for anything that is not a skill.
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"skills/get\",\"params\":{\"uri\":\"skill://mcp-server-template/SKILL.md\",$META}}" | mcp_post -H 'Mcp-Method: skills/get')
+assert_contains "skills/get returns a skill entry" '"skill":{' "$OUT"
+assert_contains "skills/get returns the requested skill" '"uri":"skill://mcp-server-template/SKILL.md"' "$OUT"
+assert_contains "skills/get carries resultType" '"resultType":"complete"' "$OUT"
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":33,\"method\":\"skills/get\",\"params\":{\"uri\":\"skill://no-such-skill/SKILL.md\",$META}}" | mcp_post -H 'Mcp-Method: skills/get')
+assert_contains "skills/get of an unknown skill is -32602" '-32602' "$OUT"
+
+# resources/directory/read — declared with directoryRead: true, so every
+# directory in the skill namespace must answer.
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"resources/directory/read\",\"params\":{\"uri\":\"skill://mcp-server-template\",$META}}" | mcp_post -H 'Mcp-Method: resources/directory/read')
+assert_contains "directory read of the skill root lists SKILL.md" '"name":"SKILL.md"' "$OUT"
+assert_contains "directory read of the skill root lists references/ as a directory" '"mimeType":"inode/directory"' "$OUT"
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":35,\"method\":\"resources/directory/read\",\"params\":{\"uri\":\"skill://mcp-server-template/references\",$META}}" | mcp_post -H 'Mcp-Method: resources/directory/read')
+assert_contains "directory read of references/ lists the supporting file" '"uri":"skill://mcp-server-template/references/TOOLS.md"' "$OUT"
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":36,\"method\":\"resources/directory/read\",\"params\":{\"uri\":\"skill://mcp-server-template/SKILL.md\",$META}}" | mcp_post -H 'Mcp-Method: resources/directory/read')
+assert_contains "directory read of a file is -32602" '-32602' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"resources/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/list')
 assert_contains "resources/list contains the skill catalog" 'skill://index.json' "$OUT"
-assert_contains "resources/list contains the template SKILL.md" 'skill://mcp-server-template/SKILL.md' "$OUT"
-assert_contains "resources/list contains the skill's supporting file" 'skill://mcp-server-template/references/TOOLS.md' "$OUT"
+assert_contains "resources/list contains the server SKILL.md" 'skill://mcp-server-template/SKILL.md' "$OUT"
+# The manifest enumerates the supporting files; the resource list does not.
+assert_not_contains "resources/list does not list the supporting files" 'skill://mcp-server-template/references/TOOLS.md' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"resources/templates/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/templates/list')
 assert_contains "resources/templates/list exposes the skill URI template" 'skill://{skill}/SKILL.md' "$OUT"
 
-# skill://index.json — the lightweight catalog a client reads at session start.
+# skill://index.json — the catalog as a resource, a mirror of skills/list for
+# a client that reads resources but has no skills/list.
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://index.json\",$META}}" \
   | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://index.json')
 assert_contains "skill index declares the skills extension" 'io.modelcontextprotocol/skills' "$OUT"
-assert_contains "skill index lists the template skill" 'mcp-server-template' "$OUT"
-# The catalog's description is read from the SKILL.md frontmatter, not
-# duplicated in Rust — this asserts the two are actually joined up.
 assert_contains "skill index carries the frontmatter trigger description" 'Operate the mcp-server-template MCP server' "$OUT"
+assert_contains "skill index carries the manifest digests" 'sha256:' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://mcp-server-template/SKILL.md\",$META}}" \
   | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://mcp-server-template/SKILL.md')
@@ -223,7 +297,7 @@ OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":25,\"method\":\"resources/read\",
 # 2026-07-28+, and only as -32002 to older ones. Assert the code the current
 # spec revision actually puts on the wire, plus our own message.
 assert_contains "unknown skill URI is a clean resource-not-found" '-32602' "$OUT"
-assert_contains "unknown skill URI points the client at the catalog" 'read skill://index.json' "$OUT"
+assert_contains "unknown skill URI points the client at the catalog" 'skills/list' "$OUT"
 
 echo "== spec enforcement =="
 
@@ -236,7 +310,9 @@ assert_contains "missing _meta rejected" '-32602' "$OUT"
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/list\",\"params\":{$META}}" | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H 'Accept: application/json' -H "$PV" -H 'Mcp-Method: tools/list' --data-binary @-)
 assert_contains "Accept without text/event-stream rejected" 'must accept' "$OUT"
 
-OUT=$(printf '%s' 'this is not json{{' | mcp_post -H 'Mcp-Method: tools/list')
+# One brace, not two: the scaffolder rejects a doubled open brace surviving
+# in a rendered template file, and one brace is just as invalid as JSON.
+OUT=$(printf '%s' 'this is not json{' | mcp_post -H 'Mcp-Method: tools/list')
 assert_not_contains "malformed JSON gets an error, not a hang" '"result"' "$OUT"
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: tools/list')
 assert_contains "server alive after malformed JSON" '"tools"' "$OUT"

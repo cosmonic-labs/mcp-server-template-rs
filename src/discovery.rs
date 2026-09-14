@@ -75,10 +75,15 @@ pub fn document(tools: &[String]) -> String {
         },
         "capabilities": {
             "tools": tools,
+            // Skills over MCP: the extension and its methods, plus the catalog
+            // as a resource for a client without the extension.
+            "extensions": {
+                skills::EXTENSION_ID: {
+                    "directoryRead": true,
+                    "methods": [skills::LIST_METHOD, skills::GET_METHOD, skills::DIRECTORY_READ_METHOD],
+                },
+            },
             "resources": {
-                // Skills over MCP: the catalog to read first, then the
-                // playbooks it points at.
-                "extension": skills::EXTENSION_ID,
                 "skillIndex": skills::INDEX_URI,
             },
         },

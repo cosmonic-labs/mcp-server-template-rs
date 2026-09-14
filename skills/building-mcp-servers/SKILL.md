@@ -170,17 +170,18 @@ primitive:
 
 | URI | Content |
 |---|---|
-| `skill://index.json` | Catalog: each skill's name + trigger description. Generated from `SKILLS`; clients read it once at session start. |
-| `skill://<name>/SKILL.md` | The playbook. Read only when the description matches the task. |
-| `skill://<name>/<path>` | Supporting files. A relative link in the SKILL.md resolves here. |
+| `skills/list` / `skills/get` | The extension's catalog: each skill's `SKILL.md` URI, its frontmatter verbatim, and a manifest with a SHA-256 digest and size per file. Generated from `SKILLS`; clients read it once at session start. The same names + descriptions ride in `instructions` for clients without the extension (every Claude surface today), and the same entries are the `skill://index.json` resource for clients that read resources but surface neither. |
+| `skill://<name>/SKILL.md` | The playbook, via `resources/read`. Read only when the description matches the task. |
+| `skill://<name>/<path>` | Supporting files, via `resources/read`. A relative link in the SKILL.md resolves here. `resources/directory/read` lists a directory. |
 
 What to write:
 
 - **Frontmatter `description` is the trigger text**, and it is the only part
   most clients see before deciding. Say *when to use this server*, not just
-  what it is — name the task shapes, not the implementation. Keep `name` and
-  `description` on **one line each**: `src/skills.rs` reads them with a
-  deliberately minimal frontmatter parser, not a YAML library.
+  what it is — name the task shapes, not the implementation. The whole
+  frontmatter block travels verbatim in the `skills/list` entry and a host
+  compares it field-by-field with the served file, so keep it valid YAML;
+  `name` must equal the package name (the last segment of the skill's URI).
 - **Write operating knowledge, not API docs.** The tool schemas are already on
   the wire via `tools/list`; duplicating them wastes context. What a model
   cannot infer from a schema: which tool to reach for first, how to sequence
@@ -198,9 +199,14 @@ What to write:
   add — an unlisted file is simply not served, and a stale `include_str!` path
   is a compile error (which is the intended failure mode). The skill's own
   `name` needs no edit: it is `env!("CARGO_PKG_NAME")`.
-- Keep `get_info().with_instructions(..)` pointing at `skill://index.json` so
-  a client that does not read resources proactively still learns the skills
-  exist.
+- Keep `get_info()` declaring the `io.modelcontextprotocol/skills` extension
+  beside `resources`, and keep `with_instructions(..)` appending
+  `skills::catalog()` — the skill names and trigger descriptions, which is
+  what a client without the extension (every Claude surface today) sees —
+  descriptively, never as a "read this first" directive, which a connector
+  review rejects. The extension methods dispatch in
+  `on_custom_request`; the manifest digests come from the embedded bytes, so
+  nothing there needs editing when the skill changes.
 
 A server whose skill is a restatement of its tool descriptions has not met
 this guardrail. If you cannot name three things an agent would get wrong
@@ -229,9 +235,11 @@ Edit `scripts/e2e.sh`:
 - Keep the protocol/spec-enforcement/robustness/guard sections — they test
   the framework and must keep passing.
 - Keep the **default route** and **skills over MCP** sections, retargeted at
-  your skill names/URIs: `GET /` is 200 JSON, `resources/list` contains your
-  `skill://` URIs, `resources/read` returns the playbook and its supporting
-  files, and an unknown `skill://` URI is a clean error. `resources/read`
+  your skill names/URIs: `GET /` is 200 JSON, `skills/list` carries your entry
+  with digests that match what `resources/read` serves (the suite re-hashes
+  them), `skills/get` answers by URI, `resources/directory/read` walks the
+  skill, `resources/list` contains your `SKILL.md` URI, and an unknown
+  `skill://` URI is a clean error. `resources/read`
   needs `Mcp-Name: <the uri>` (SEP-2243 takes the name from `params.uri` for
   resource methods, not `params.name`).
 - Ports are `${PORT:-8199}`-style overridable; a stale wasmtime from another
