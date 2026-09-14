@@ -75,16 +75,13 @@ pub fn document(tools: &[String]) -> String {
         },
         "capabilities": {
             "tools": tools,
-            // Skills over MCP: the extension and its methods, plus the legacy
-            // catalog resource for a client without the extension.
+            // Skills over MCP: the extension and its methods. The catalog
+            // itself is `skills/list` (and the server's `instructions`).
             "extensions": {
                 skills::EXTENSION_ID: {
                     "directoryRead": true,
                     "methods": [skills::LIST_METHOD, skills::GET_METHOD, skills::DIRECTORY_READ_METHOD],
                 },
-            },
-            "resources": {
-                "skillIndex": skills::INDEX_URI,
             },
         },
         "skills": skills,

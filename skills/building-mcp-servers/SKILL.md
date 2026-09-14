@@ -170,7 +170,7 @@ primitive:
 
 | URI | Content |
 |---|---|
-| `skills/list` / `skills/get` | The extension's catalog: each skill's `SKILL.md` URI, its frontmatter verbatim, and a manifest with a SHA-256 digest and size per file. Generated from `SKILLS`; clients read it once at session start. `skill://index.json` mirrors it for clients without the extension. |
+| `skills/list` / `skills/get` | The extension's catalog: each skill's `SKILL.md` URI, its frontmatter verbatim, and a manifest with a SHA-256 digest and size per file. Generated from `SKILLS`; clients read it once at session start. The same names + descriptions ride in `instructions` for clients without the extension (every Claude surface today). |
 | `skill://<name>/SKILL.md` | The playbook, via `resources/read`. Read only when the description matches the task. |
 | `skill://<name>/<path>` | Supporting files, via `resources/read`. A relative link in the SKILL.md resolves here. `resources/directory/read` lists a directory. |
 
@@ -200,10 +200,11 @@ What to write:
   is a compile error (which is the intended failure mode). The skill's own
   `name` needs no edit: it is `env!("CARGO_PKG_NAME")`.
 - Keep `get_info()` declaring the `io.modelcontextprotocol/skills` extension
-  beside `resources`, and keep `with_instructions(..)` *naming* the skill
-  surface (`skills/list`; `skill://index.json` for a client without the
-  extension) — descriptively, never as a "read this first" directive, which a
-  connector review rejects. The extension methods dispatch in
+  beside `resources`, and keep `with_instructions(..)` appending
+  `skills::catalog()` — the skill names and trigger descriptions, which is
+  what a client without the extension (every Claude surface today) sees —
+  descriptively, never as a "read this first" directive, which a connector
+  review rejects. The extension methods dispatch in
   `on_custom_request`; the manifest digests come from the embedded bytes, so
   nothing there needs editing when the skill changes.
 

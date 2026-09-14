@@ -242,20 +242,20 @@ impl ServerHandler for TemplateServer {
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
         ))
-        // Descriptive, not procedural: say what the server is and what it
-        // publishes. A directory review rejects instructions that script the
-        // model's tool sequence; the skill is where the how-to lives.
-        .with_instructions(
+        // Descriptive, not procedural: what the server is, then the skill
+        // catalog — every skill's name and trigger description. A client
+        // without the Skills extension (every Claude surface today) has no
+        // `skills/list`; what it does see, in its system prompt before the
+        // first tool call, is this text. A directory review rejects
+        // instructions that script the model's tool sequence; the skill is
+        // where the how-to lives.
+        .with_instructions(format!(
             "Template MCP server running as a WebAssembly component on \
              Cosmonic Desktop. `echo`, `add` and `current_time` exercise \
              connectivity; `http_get` exercises outbound HTTP under the \
-             workload's allow-list. They are placeholders for your own tools.\n\n\
-             This server publishes a skill — a playbook for its tools — over \
-             the io.modelcontextprotocol/skills extension (`skills/list`, \
-             `skills/get`). For a client without the extension, the same \
-             catalog is the `skill://index.json` resource and the playbook is \
-             `skill://<name>/SKILL.md`.",
-        )
+             workload's allow-list. They are placeholders for your own tools.\n\n{}",
+            skills::catalog()
+        ))
     }
 
     /// The three methods the Skills extension defines. rmcp has no first-class
@@ -324,9 +324,8 @@ impl ServerHandler for TemplateServer {
         Ok(CustomResult::new(result))
     }
 
-    /// Skills over MCP: the catalog and one `SKILL.md` resource per skill.
-    /// Supporting files are enumerated by the manifest (`skills/list`), not
-    /// here.
+    /// Skills over MCP: one `SKILL.md` resource per skill. Supporting files
+    /// are enumerated by the manifest (`skills/list`), not here.
     ///
     /// The whole set is returned in one page — a server embedding enough
     /// skills for that to be unwieldy should honour `request.cursor` and set
@@ -363,9 +362,8 @@ impl ServerHandler for TemplateServer {
             // for a skill file the server does not serve.
             ErrorData::resource_not_found(
                 format!(
-                    "no resource at {}; skills/list (or {}) enumerates the skills this server serves",
-                    request.uri,
-                    skills::INDEX_URI
+                    "no resource at {}; skills/list enumerates the skills this server serves",
+                    request.uri
                 ),
                 None,
             )
