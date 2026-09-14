@@ -5,16 +5,19 @@
 //! schema for each tool from its `Parameters` type and wire up dispatch.
 //!
 //! Alongside the tools, this server publishes **skills** — natural-language
-//! playbooks served over the MCP resources primitive under `skill://` URIs.
-//! See [`crate::skills`]; the handlers at the bottom of this file are the
-//! protocol surface for them.
+//! playbooks served through the MCP Skills extension
+//! (`io.modelcontextprotocol/skills`: `skills/list`, `skills/get`,
+//! `resources/directory/read`, and the files under `skill://` URIs via
+//! `resources/read`). See [`crate::skills`]; the handlers at the bottom of
+//! this file are the protocol surface for them.
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, Implementation, ListResourceTemplatesResult, ListResourcesResult,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-    ResourceContents, ServerCapabilities, ServerInfo,
+    CallToolResult, ContentBlock, CustomRequest, CustomResult, ErrorCode, ExtensionCapabilities,
+    Implementation, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
@@ -223,11 +226,15 @@ fn deny_private_target(uri: &http::Uri) -> Option<String> {
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TemplateServer {
     fn get_info(&self) -> ServerInfo {
+        // Skills over MCP: the extension is declared beside `resources`, which
+        // it rides on — a server declaring it MUST declare both. `server/discover`
+        // (the stateless 2026-07-28 handshake) serves these same capabilities.
+        let mut extensions = ExtensionCapabilities::new();
+        extensions.insert(skills::EXTENSION_ID.to_string(), skills::capability());
         ServerInfo::new(
             ServerCapabilities::builder()
+                .enable_extensions_with(extensions)
                 .enable_tools()
-                // Skills over MCP rides on the resources primitive: declaring
-                // it is what makes `skill://` URIs discoverable at all.
                 .enable_resources()
                 .build(),
         )
@@ -235,19 +242,91 @@ impl ServerHandler for TemplateServer {
             env!("CARGO_PKG_NAME"),
             env!("CARGO_PKG_VERSION"),
         ))
+        // Descriptive, not procedural: say what the server is and what it
+        // publishes. A directory review rejects instructions that script the
+        // model's tool sequence; the skill is where the how-to lives.
         .with_instructions(
             "Template MCP server running as a WebAssembly component on \
-             Cosmonic Desktop. Use `echo`, `add`, or `current_time` to \
-             verify connectivity, `http_get` to test outbound HTTP, then \
-             replace them with your own tools.\n\n\
-             This server publishes skills — playbooks describing when and how \
-             to use its tools. Read `skill://index.json` for the catalog, then \
-             read `skill://<name>/SKILL.md` for any skill whose description \
-             matches the task at hand.",
+             Cosmonic Desktop. `echo`, `add` and `current_time` exercise \
+             connectivity; `http_get` exercises outbound HTTP under the \
+             workload's allow-list. They are placeholders for your own tools.\n\n\
+             This server publishes a skill — a playbook for its tools — over \
+             the io.modelcontextprotocol/skills extension (`skills/list`, \
+             `skills/get`). For a client without the extension, the same \
+             catalog is the `skill://index.json` resource and the playbook is \
+             `skill://<name>/SKILL.md`.",
         )
     }
 
-    /// Skills over MCP: every skill file, plus the catalog, as resources.
+    /// The three methods the Skills extension defines. rmcp has no first-class
+    /// handler for an extension method, so they arrive here. Every result is
+    /// the 2026-07-28 shape: `resultType: "complete"`, and on list/get the
+    /// `ttlMs` + `cacheScope` the extension makes REQUIRED. The content is
+    /// compiled in, so an hour is an honest freshness hint and `public` is
+    /// accurate — it is identical for every caller.
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CustomResult, ErrorData> {
+        const TTL_MS: u64 = 60 * 60 * 1000;
+        let CustomRequest { method, params, .. } = request;
+        let uri = || {
+            params
+                .as_ref()
+                .and_then(|p| p.get("uri"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .ok_or_else(|| {
+                    ErrorData::invalid_params(
+                        format!("{method} requires a string `uri` parameter"),
+                        None,
+                    )
+                })
+        };
+        let result = match method.as_str() {
+            skills::LIST_METHOD => serde_json::json!({
+                "resultType": "complete",
+                "skills": skills::entries(),
+                "ttlMs": TTL_MS,
+                "cacheScope": "public",
+            }),
+            skills::GET_METHOD => {
+                let uri = uri()?;
+                let entry = skills::entry(&uri).ok_or_else(|| {
+                    ErrorData::invalid_params(format!("No skill is served at {uri}"), None)
+                })?;
+                serde_json::json!({
+                    "resultType": "complete",
+                    "skill": entry,
+                    "ttlMs": TTL_MS,
+                    "cacheScope": "public",
+                })
+            }
+            skills::DIRECTORY_READ_METHOD => {
+                let uri = uri()?;
+                let resources = skills::directory(&uri).ok_or_else(|| {
+                    ErrorData::invalid_params(
+                        format!("{uri} is not a directory resource this server serves"),
+                        None,
+                    )
+                })?;
+                serde_json::json!({ "resultType": "complete", "resources": resources })
+            }
+            other => {
+                return Err(ErrorData::new(
+                    ErrorCode::METHOD_NOT_FOUND,
+                    other.to_string(),
+                    None,
+                ))
+            }
+        };
+        Ok(CustomResult::new(result))
+    }
+
+    /// Skills over MCP: the catalog and one `SKILL.md` resource per skill.
+    /// Supporting files are enumerated by the manifest (`skills/list`), not
+    /// here.
     ///
     /// The whole set is returned in one page — a server embedding enough
     /// skills for that to be unwieldy should honour `request.cursor` and set
@@ -279,9 +358,12 @@ impl ServerHandler for TemplateServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let (mime_type, text) = skills::read(&request.uri).ok_or_else(|| {
+            // -32002 to a handshake peer; the SDK upgrades it to -32602 for a
+            // 2026-07-28 peer (SEP-2164), which is what the extension expects
+            // for a skill file the server does not serve.
             ErrorData::resource_not_found(
                 format!(
-                    "no resource at {}; read {} for the skills this server serves",
+                    "no resource at {}; skills/list (or {}) enumerates the skills this server serves",
                     request.uri,
                     skills::INDEX_URI
                 ),

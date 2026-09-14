@@ -51,6 +51,10 @@ tokio = { version = "1.50", features = ["rt", "macros", "sync", "time", "io-util
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Skills over MCP: the skill entry carries the SKILL.md frontmatter verbatim
+# (a real YAML parse) and a SHA-256 digest of every served file.
+serde_yaml = "0.9"
+sha2 = { version = "0.11", default-features = false }
 schemars = "1"
 thiserror = "2"
 
