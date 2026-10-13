@@ -120,9 +120,13 @@ let response = crate::bridge::outbound::fetch(request).await; // deadline + size
 - **CRITICAL — enable `inter-task-wakeup`.** Any server that does outbound
   HTTP MUST add this to `Cargo.toml` (the template already does):
   ```toml
-  wit-bindgen = { version = "0.57.1", default-features = false,
+  wit-bindgen = { version = "0.62.0", default-features = false,
       features = ["async", "async-spawn", "inter-task-wakeup"] }
   ```
+  Keep this version equal to the one `wasip3` depends on (`wasip3` 0.9.0 uses
+  0.62.0) so Cargo builds a single runtime. Never pair `inter-task-wakeup` with
+  wit-bindgen 0.58 or older: wasmtime 48 traps those components with
+  "waitable cannot be used synchronously while added to a waitable set".
   Without it, concurrent invocations on one reused instance **trap** ("Rust
   task cannot sleep waiting only on Rust-originating events") the moment a task
   parks on a Rust-only event (the bridge's request lock / outbound oneshot).

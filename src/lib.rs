@@ -123,7 +123,7 @@ impl wasip3::exports::http::handler::Guest for Component {
             .set_status_code(parts.status.as_u16())
             .map_err(|()| ErrorCode::InternalError(Some("invalid status code".into())))?;
 
-        wasip3::wit_bindgen::spawn(async move {
+        wasip3::wit_bindgen::spawn_local(async move {
             let _guard = guard;
             loop {
                 let frame = bridge::drive(tracing::Instrument::instrument(
@@ -236,7 +236,7 @@ fn static_response(status: u16, content_type: &str, body: String) -> Result<Resp
     response
         .set_status_code(status)
         .map_err(|()| ErrorCode::InternalError(Some("invalid status code".into())))?;
-    wasip3::wit_bindgen::spawn(async move {
+    wasip3::wit_bindgen::spawn_local(async move {
         let frame = http_body::Frame::data(bytes::Bytes::from(body));
         let _ = writer.send_frame(frame).await;
         drop(writer.stream_writer);

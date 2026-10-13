@@ -54,7 +54,7 @@ Template for building **Model Context Protocol (MCP) servers** as
 
 ## Prerequisites
 
-- Rust 1.90+ with the wasip2 target: `rustup target add wasm32-wasip2`
+- Rust 1.94+ with the wasip2 target: `rustup target add wasm32-wasip2`
 - To deploy: [Cosmonic Desktop] (runtime ≥ 2.5) — install and setup per the
   [Cosmonic Desktop docs]
 
