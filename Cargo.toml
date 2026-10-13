@@ -2,7 +2,7 @@
 name = "mcp-server-template"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.94"
 description = "Template for building MCP servers as WebAssembly components (wasi:http@0.3.0 / WASI p3)"
 license = "Apache-2.0"
 repository = "https://github.com/cosmonic-labs/mcp-server-template-rs"
