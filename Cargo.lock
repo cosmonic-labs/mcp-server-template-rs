@@ -570,7 +570,7 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "wasip3",
- "wit-bindgen 0.57.1",
+ "wit-bindgen 0.62.0",
 ]
 
 [[package]]
@@ -1477,15 +1477,15 @@ dependencies = [
 
 [[package]]
 name = "wasip3"
-version = "0.7.0+wasi-0.3.0"
+version = "0.9.0+wasi-0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07aa681120704bf09828d1f7cf7e763666c1dc6a36e5096efd0ad9aadfb302d3"
+checksum = "f1d5749fdf69bb9400562eba50f8f25f5cd800ef4b74300038b6f99ae7409674"
 dependencies = [
  "bytes",
  "http",
  "http-body",
  "thiserror",
- "wit-bindgen 0.57.1",
+ "wit-bindgen 0.62.0",
 ]
 
 [[package]]
@@ -1704,6 +1704,12 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "wit-bindgen"
+version = "0.62.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53cb4b5556c3a791e86838ea287782bdafa704d55b0e68b5b81a3a16b9ea5f4b"
 dependencies = [
  "bitflags",
  "futures",
