@@ -33,7 +33,7 @@ Template for building **Model Context Protocol (MCP) servers** as
 ## Layout
 
 ```
-├── .cargo/config.toml   # default target wasm32-wasip2 + tokio_unstable cfg
+├── .cargo/config.toml   # default target wasm32-wasip3 + tokio_unstable cfg
 ├── .wash/config.yaml    # wash v2 / Cosmonic Desktop project config
 ├── deploy/workload.yaml # deploy manifest for the published image (mcp.ai labels)
 ├── docs/auth.md         # authorization options for the Desktop use-case
@@ -54,9 +54,17 @@ Template for building **Model Context Protocol (MCP) servers** as
 
 ## Prerequisites
 
-- Rust 1.94+ with the wasip2 target: `rustup target add wasm32-wasip2`
+- The pinned Rust nightly and native WASI p3 target from `rust-toolchain.toml`.
+  Run `rustup show` to install the toolchain, target, formatter, and Clippy.
 - To deploy: [Cosmonic Desktop] (runtime ≥ 2.5) — install and setup per the
   [Cosmonic Desktop docs]
+
+Stable Rust 1.99 does not ship the native p3 standard library. The pinned
+nightly includes it, so use the repository's toolchain for builds and checks.
+The bindings also enable `wit-bindgen/std` for native p3 task-local storage.
+The optional telemetry SDK still uses `getrandom 0.3`, which does not support
+p3. `compat/getrandom-03` forwards its random-data API to `getrandom 0.4` and
+the native p3 entropy backend.
 
 ## Scaffold
 
@@ -79,9 +87,9 @@ ingress `host`, `mcp.ai/*` labels, `image` ref, and `MCP_ALLOWED_HOSTS`.
 $ cargo build --release
 ```
 
-`.cargo/config.toml` defaults the target to `wasm32-wasip2`, which emits a
-component directly. The output at
-`target/wasm32-wasip2/release/mcp_server_template.wasm` exports
+`.cargo/config.toml` defaults to `wasm32-wasip3`, so the Rust standard library
+and the server use WASI p3. The output at
+`target/wasm32-wasip3/release/mcp_server_template.wasm` exports
 `wasi:http/handler@0.3.0` (verify with `wasm-tools component wit <path>`).
 
 ## Deploy on Cosmonic Desktop
@@ -304,6 +312,8 @@ owns OTLP export; the component emits structured, correlatable signals.**
   wash-runtime have drifted (`tracing.on-start` signature), so this feature
   fails to link on Cosmonic Desktop 0.5.18 until the two align. Keep it off
   for `wasmtime serve` (no wasi:otel host support there).
+  Its upstream interface also references the `wasi:clocks/wall-clock@0.2.12`
+  datetime type. The default build has only WASI 0.3 imports.
 
 ## Testing
 
@@ -314,8 +324,23 @@ server, including a black-holed upstream), the Host-header guard, the SSRF
 guard, oversized bodies, and concurrency. CI runs it on every push. `PORT`,
 `GUARD_PORT` and `FIXTURE_PORT` are overridable when another project's suite
 is already holding the defaults. Note that `.cargo/config.toml` defaults the build
-target to wasm32-wasip2, so plain `cargo test` would build (unrunnable) wasm
+target to wasm32-wasip3, so plain `cargo test` would build (unrunnable) wasm
 test binaries — the e2e harness is the test entry point.
+
+The suite requires Wasmtime 49.0.3+ and wasm-tools 1.262.0+. CI pins these
+versions in `.github/workflows/ci.yml`. The WASI bindings use `wasip3 0.9.0`
+with its matching `wit-bindgen 0.62` runtime; keep the direct `wit-bindgen`
+dependency aligned so `inter-task-wakeup` applies to the generated bindings.
+
+The harness sends absolute-form HTTP request targets because Wasmtime 49's
+CLI strips `Host` from incoming headers without copying it into the WASI
+request authority for origin-form requests. Absolute-form targets preserve
+that authority for the component's Host guard, including disallowed-host tests.
+
+The outbound bridge retains each request's transmission handle until its
+response body has been drained. Dropping it early can cancel host I/O on
+Wasmtime 49 and return an incomplete body. The concurrency check covers 32
+parallel outbound calls and verifies the fixture body in every response.
 
 ## Configuration
 

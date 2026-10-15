@@ -1,0 +1,13 @@
+[package]
+name = "getrandom"
+version = "0.3.4"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+getrandom-04 = { package = "getrandom", version = "0.4.3" }
+
+[features]
+std = ["getrandom-04/std"]
+wasm_js = ["getrandom-04/wasm_js"]

@@ -32,7 +32,7 @@ identity context headers (e.g. `x-mcp-subject`, `x-mcp-scopes`).
 ## Option B — In-component token validation (JWT/JWKS)
 
 The component validates bearer JWTs itself: pure-Rust JOSE crates (`jsonwebtoken`,
-`biscuit`) compile to wasm32-wasip2; the JWKS is fetched through
+`biscuit`) compile to wasm32-wasip3; the JWKS is fetched through
 `bridge::outbound` (issuer host on `allowedHosts`) and cached per instance.
 
 - **Pros**: no platform dependency; works on any wasi:http host; end-to-end

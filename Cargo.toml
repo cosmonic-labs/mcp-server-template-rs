@@ -2,7 +2,7 @@
 name = "mcp-server-template"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.94"
+rust-version = "1.100"
 description = "Template for building MCP servers as WebAssembly components (wasi:http@0.3.0 / WASI p3)"
 license = "Apache-2.0"
 repository = "https://github.com/cosmonic-labs/mcp-server-template-rs"
@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # Official Model Context Protocol SDK. The streamable-http-server transport is
-# pure `http`/`http-body` types (no hyper/axum), so it compiles to wasm32-wasip2.
+# pure `http`/`http-body` types (no hyper/axum), so it compiles to wasm32-wasip3.
 rmcp = { version = "3.5.1", default-features = false, features = [
     "server",
     "macros",
@@ -24,18 +24,10 @@ rmcp = { version = "3.5.1", default-features = false, features = [
 # to hyperium `http` types via `http_compat`.
 wasip3 = { version = "0.9.0", features = ["http-compat"] }
 
-# The bridge parks tasks on Rust-only events (the request-lock mutex, the
-# outbound-reply oneshot). Under concurrent same-instance invocation the
-# component-model executor must be able to wake one task from another's action,
-# which requires wit-bindgen's `inter-task-wakeup` feature. wasip3 only forwards
-# `async-spawn`, so enable it here directly (Cargo unifies features across the
-# graph, turning it on for wasip3's generated code too). Version pinned to match
-# wasip3's wit-bindgen. WITHOUT this, any outbound tool traps under concurrency.
-# Keep wit-bindgen at 0.59 or newer: 0.58 and older combined with
-# `inter-task-wakeup` trap on wasmtime 48 ("waitable cannot be used
-# synchronously while added to a waitable set"), so bump wasip3 and this pin
-# together.
+# Match wasip3's runtime. std provides p3 task-local storage; inter-task wakeups
+# let tasks resume while waiting on the request lock or outbound replies.
 wit-bindgen = { version = "0.62.0", default-features = false, features = [
+    "std",
     "async",
     "async-spawn",
     "inter-task-wakeup",
@@ -43,15 +35,15 @@ wit-bindgen = { version = "0.62.0", default-features = false, features = [
 
 http = "1"
 http-body = "1"
-http-body-util = "0.1"
+http-body-util = "0.1.5"
 bytes = "1"
 
 # rmcp drives its session/dispatch machinery with tokio primitives; on
-# wasm32-wasip2 we run a single-threaded runtime. Outbound I/O goes through
+# wasm32-wasip3 we run a single-threaded runtime. Outbound I/O goes through
 # the wasi:http bindings (see src/bridge.rs), not tokio::net — if you add the
 # `net` feature for raw TCP, the `tokio_unstable` cfg in .cargo/config.toml
 # already enables its wasm support.
-tokio = { version = "1.50", features = ["rt", "macros", "sync", "time", "io-util"] }
+tokio = { version = "1.53.3", features = ["rt", "macros", "sync", "time", "io-util"] }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -82,6 +74,9 @@ opentelemetry_sdk = { version = "0.31", default-features = false, features = [
 ], optional = true }
 opentelemetry-wasi = { git = "https://github.com/bytecodealliance/opentelemetry-wasi", rev = "2962a286aa66", optional = true }
 tracing-opentelemetry = { version = "0.32", default-features = false, optional = true }
+
+[patch.crates-io]
+getrandom-03 = { package = "getrandom", path = "compat/getrandom-03" }
 
 [features]
 default = []

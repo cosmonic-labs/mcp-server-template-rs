@@ -2,8 +2,8 @@
 # (build + dev loop + promote) and by the `wash` CLI alike.
 version: "0.1.0"
 build:
-  command: cargo build --target wasm32-wasip2 --release
-  component_path: target/wasm32-wasip2/release/mcp_server_template.wasm
+  command: cargo build --target wasm32-wasip3 --release
+  component_path: target/wasm32-wasip3/release/mcp_server_template.wasm
 # Mirrors WorkloadDeployment components[].localResources; carried over into
 # the durable Workload draft when you promote this project.
 workload:
