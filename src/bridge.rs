@@ -175,7 +175,54 @@ pub mod outbound {
 
     use bytes::Bytes;
     use http_body_util::{BodyExt as _, Full};
-    use wasip3::http_compat::{http_from_wasi_response, http_into_wasi_request};
+    use wasip3::http::types::{ErrorCode, Request};
+    use wasip3::http_compat::{http_from_wasi_response, BodyWriter, RequestOptionsExtension};
+
+    type Transmission = wasip3::wit_bindgen::FutureReader<Result<(), ErrorCode>>;
+
+    fn into_wasi_request(
+        request: http::Request<Bytes>,
+    ) -> Result<(Request, Transmission), ErrorCode> {
+        let (mut parts, body) = request.into_parts();
+        let host = parts
+            .headers
+            .remove(http::header::HOST)
+            .map(|value| value.to_str().map(str::to_owned))
+            .transpose()
+            .map_err(|_| ErrorCode::HttpRequestUriInvalid)?;
+        let authority = match (parts.uri.authority(), host) {
+            (Some(authority), Some(host)) if authority != host.as_str() => {
+                return Err(ErrorCode::HttpRequestUriInvalid);
+            }
+            (Some(authority), _) => Some(authority.as_str().to_owned()),
+            (None, host) => host,
+        };
+        let options = parts
+            .extensions
+            .remove::<RequestOptionsExtension>()
+            .map(|options| options.0);
+        let headers = parts.headers.try_into().map_err(|err| {
+            ErrorCode::InternalError(Some(format!("invalid request headers: {err}")))
+        })?;
+        let (writer, body_rx, trailers_rx) = BodyWriter::new();
+        let (request, transmission) = Request::new(headers, Some(body_rx), trailers_rx, options);
+        request
+            .set_method(&parts.method.into())
+            .map_err(|()| ErrorCode::HttpRequestMethodInvalid)?;
+        request
+            .set_scheme(parts.uri.scheme().map(Into::into).as_ref())
+            .map_err(|()| ErrorCode::HttpProtocolError)?;
+        request
+            .set_authority(authority.as_deref())
+            .map_err(|()| ErrorCode::HttpRequestUriInvalid)?;
+        request
+            .set_path_with_query(parts.uri.path_and_query().map(|path| path.as_str()))
+            .map_err(|()| ErrorCode::HttpRequestUriInvalid)?;
+        wasip3::wit_bindgen::spawn_local(async move {
+            let _ = writer.send_http_body(&mut Full::new(body)).await;
+        });
+        Ok((request, transmission))
+    }
 
     /// Default upper bound on a buffered outbound response body, overridable
     /// with `MCP_OUTBOUND_MAX_BYTES`. Some upstreams (e.g. SEC EDGAR's
@@ -243,7 +290,7 @@ pub mod outbound {
             .unwrap_or(DEFAULT_TIMEOUT_MS);
         let max_bytes = max_response_bytes();
         super::timeout(timeout_ms, async move {
-            let wasi_request = http_into_wasi_request(request.map(Full::new))?;
+            let (wasi_request, transmission) = into_wasi_request(request)?;
             let wasi_response = wasip3::http::client::send(wasi_request).await?;
             let response = http_from_wasi_response(wasi_response)?;
             let (parts, body) = response.into_parts();
@@ -258,6 +305,8 @@ pub mod outbound {
                     }
                 })?
                 .to_bytes();
+            // The transmission handle keeps host I/O alive through the response read.
+            drop(transmission);
             Ok(http::Response::from_parts(parts, bytes))
         })
         .await

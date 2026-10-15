@@ -4,7 +4,7 @@
 # Builds the component, serves it with `wasmtime serve -Sp3,cli,http`, and
 # exercises the MCP 2026-07-28 streamable-HTTP protocol plus the failure
 # modes an adversarial client can trigger. Requires: cargo (wasm32-wasip2
-# target), wasmtime >= 46, curl, python3.
+# target), Wasmtime 49.0.3+, wasm-tools 1.262.0+, curl, python3.
 #
 # Usage: scripts/e2e.sh [--no-build]
 set -u
@@ -53,9 +53,10 @@ assert_not_contains() {
   esac
 }
 
+# Absolute-form targets preserve authority through Wasmtime's WASI p3 conversion.
 # mcp_post <extra curl args...> — POST a body given on stdin with standard headers
 mcp_post() {
-  curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" -H "$PV" "$@" --data-binary @-
+  curl -sS --max-time 20 -X POST "$BASE" --request-target "$BASE" -H "$CT" -H "$ACCEPT" -H "$PV" "$@" --data-binary @-
 }
 
 cleanup() {
@@ -126,16 +127,16 @@ echo "== protocol =="
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | mcp_post)
 assert_contains "initialize stays on the latest legacy revision" '"protocolVersion":"2025-11-25"' "$OUT"
 
-HDRS=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" -H "$PV" -D - -o /dev/null --data-binary @-)
+HDRS=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | curl -sS --max-time 20 -X POST "$BASE" --request-target "$BASE" -H "$CT" -H "$ACCEPT" -H "$PV" -D - -o /dev/null --data-binary @-)
 assert_contains "initialize streams as SSE" 'text/event-stream' "$HDRS"
 
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"old","version":"0"}}}' \
-  | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" \
+  | curl -sS --max-time 20 -X POST "$BASE" --request-target "$BASE" -H "$CT" -H "$ACCEPT" \
       -H 'MCP-Protocol-Version: 2025-03-26' --data-binary @-)
 assert_contains "older initialize revision is preserved" '"protocolVersion":"2025-03-26"' "$OUT"
 
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":2,"method":"resources/list","params":{}}' \
-  | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" \
+  | curl -sS --max-time 20 -X POST "$BASE" --request-target "$BASE" -H "$CT" -H "$ACCEPT" \
       -H 'MCP-Protocol-Version: 2025-11-25' --data-binary @-)
 assert_contains "legacy resource request works without inline metadata" 'skill://index.json' "$OUT"
 assert_not_contains "legacy resources omit modern cache hints" '"ttlMs"' "$OUT"
@@ -192,7 +193,7 @@ fi
 # The discovery route must not shadow the protocol: POST still reaches the
 # transport on / and on the canonical /mcp path.
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' \
-  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${PORT}/mcp" -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${PORT}/mcp" --request-target "http://127.0.0.1:${PORT}/mcp" -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
 assert_contains "POST /mcp serves the legacy handshake" '"protocolVersion":"2025-11-25"' "$OUT"
 
 echo "== skills over MCP (io.modelcontextprotocol/skills) =="
@@ -213,7 +214,7 @@ assert_contains "server/discover supports the modern protocol" '2026-07-28' "$OU
 assert_contains "server/discover includes server identity metadata" '"io.modelcontextprotocol/serverInfo"' "$OUT"
 
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":2,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}' \
-  | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" \
+  | curl -sS --max-time 20 -X POST "$BASE" --request-target "$BASE" -H "$CT" -H "$ACCEPT" \
       -H 'MCP-Protocol-Version: 2099-01-01' -H 'Mcp-Method: server/discover' --data-binary @-)
 assert_contains "unsupported discovery version is rejected" '"code":-32022' "$OUT"
 assert_contains "unsupported discovery version reports supported revisions" '"supported":[' "$OUT"
@@ -246,7 +247,7 @@ for skill in listing["skills"]:
     for f in skill["resources"]:
         body = json.dumps({"jsonrpc": "2.0", "id": 31, "method": "resources/read",
                            "params": dict(uri=f["uri"], **meta)})
-        out = subprocess.run(["curl", "-sS", "--max-time", "20", "-X", "POST", base,
+        out = subprocess.run(["curl", "-sS", "--max-time", "20", "-X", "POST", base, "--request-target", base,
                               "-H", "Content-Type: application/json",
                               "-H", "Accept: application/json, text/event-stream",
                               "-H", "MCP-Protocol-Version: 2026-07-28",
@@ -331,7 +332,7 @@ assert_contains "missing Mcp-Method header rejected" 'Mcp-Method' "$OUT"
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}' | mcp_post -H 'Mcp-Method: tools/list')
 assert_contains "missing _meta rejected" '-32602' "$OUT"
 
-OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/list\",\"params\":{$META}}" | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H 'Accept: application/json' -H "$PV" -H 'Mcp-Method: tools/list' --data-binary @-)
+OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"tools/list\",\"params\":{$META}}" | curl -sS --max-time 20 -X POST "$BASE" --request-target "$BASE" -H "$CT" -H 'Accept: application/json' -H "$PV" -H 'Mcp-Method: tools/list' --data-binary @-)
 assert_contains "Accept without text/event-stream rejected" 'must accept' "$OUT"
 
 # One brace, not two: the scaffolder rejects a doubled open brace surviving
@@ -386,26 +387,24 @@ else
   fail "8 concurrent tool calls all succeed" "$CONCURRENT_FAILS of 8 failed"
 fi
 
-# Regression: concurrent OUTBOUND calls on one reused instance park tasks on
-# Rust-only events (request lock, outbound oneshot). Without wit-bindgen's
-# `inter-task-wakeup` feature the component-model executor traps
-# ("Rust task cannot sleep waiting only on Rust-originating events"). This must
-# stay green — it exercises the whole bridge under concurrency.
+# Concurrent outbound calls exercise inter-task wakeups and the transmission
+# handle's lifetime. Every response must include its complete fixture body.
+OUTBOUND_CALLS=32
 OUTBOUND_FAILS=0
 OB_PIDS=()
-for i in $(seq 1 8); do
+for i in $(seq 1 "$OUTBOUND_CALLS"); do
   (printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":$i,\"method\":\"tools/call\",\"params\":{\"name\":\"http_get\",\"arguments\":{\"url\":\"http://127.0.0.1:${FIXTURE_PORT}/hello.txt\"},$META}}" \
     | mcp_post -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' > "/tmp/mcp-e2e-ob-$i.json") &
   OB_PIDS+=($!)
 done
 wait "${OB_PIDS[@]}"
-for i in $(seq 1 8); do
+for i in $(seq 1 "$OUTBOUND_CALLS"); do
   grep -q 'hello from fixture' "/tmp/mcp-e2e-ob-$i.json" || OUTBOUND_FAILS=$((OUTBOUND_FAILS + 1))
 done
 if [ "$OUTBOUND_FAILS" -eq 0 ]; then
-  pass "8 concurrent outbound calls all succeed (inter-task-wakeup)"
+  pass "$OUTBOUND_CALLS concurrent outbound calls return complete bodies"
 else
-  fail "8 concurrent outbound calls all succeed (inter-task-wakeup)" "$OUTBOUND_FAILS of 8 failed"
+  fail "$OUTBOUND_CALLS concurrent outbound calls return complete bodies" "$OUTBOUND_FAILS of $OUTBOUND_CALLS failed"
 fi
 
 echo "== Host-header guard (MCP_ALLOWED_HOSTS) =="
@@ -419,31 +418,31 @@ for _ in $(seq 1 50); do
 done
 
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' \
-  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" --request-target "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
 assert_contains "allowed Host accepted" '"protocolVersion"' "$OUT"
 
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' \
-  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" -H 'Host: evil.example' -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
-assert_contains "disallowed Host rejected" 'Forbidden' "$OUT"
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" --request-target 'http://evil.example/' -H 'Host: evil.example' -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
+assert_contains "disallowed authority rejected" 'Forbidden' "$OUT"
 
 echo "== SSRF guard (default deny of local targets) =="
 
 # The guard instance has no MCP_HTTP_GET_ALLOW_LOCAL: local targets denied.
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"tools/call\",\"params\":{\"name\":\"http_get\",\"arguments\":{\"url\":\"http://127.0.0.1:${FIXTURE_PORT}/hello.txt\"},$META}}" \
-  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" --request-target "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
 assert_contains "http_get denies loopback target by default" 'denied' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"tools/call\",\"params\":{\"name\":\"http_get\",\"arguments\":{\"url\":\"http://169.254.169.254/latest/meta-data/\"},$META}}" \
-  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" --request-target "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
 assert_contains "http_get denies link-local (IMDS) target" 'denied' "$OUT"
 
 # file:// is refused either by the URI builder (invalid_params) or by the
 # scheme check (denied) — both are denials; it must never produce a result.
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"http_get\",\"arguments\":{\"url\":\"file:///etc/passwd\"},$META}}" \
-  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" --request-target "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
 assert_not_contains "http_get denies non-http scheme" '"isError":false' "$OUT"
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":15,\"method\":\"tools/call\",\"params\":{\"name\":\"http_get\",\"arguments\":{\"url\":\"gopher://example.com/\"},$META}}" \
-  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
+  | curl -sS --max-time 20 -X POST "http://127.0.0.1:${GUARD_PORT}/" --request-target "http://127.0.0.1:${GUARD_PORT}/" -H "$CT" -H "$ACCEPT" -H "$PV" -H 'Mcp-Method: tools/call' -H 'Mcp-Name: http_get' --data-binary @-)
 assert_contains "http_get denies non-http scheme with host" 'denied' "$OUT"
 
 echo

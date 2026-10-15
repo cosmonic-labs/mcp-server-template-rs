@@ -317,6 +317,21 @@ is already holding the defaults. Note that `.cargo/config.toml` defaults the bui
 target to wasm32-wasip2, so plain `cargo test` would build (unrunnable) wasm
 test binaries — the e2e harness is the test entry point.
 
+The suite requires Wasmtime 49.0.3+ and wasm-tools 1.262.0+. CI pins these
+versions in `.github/workflows/ci.yml`. The WASI bindings use `wasip3 0.9.0`
+with its matching `wit-bindgen 0.62` runtime; keep the direct `wit-bindgen`
+dependency aligned so `inter-task-wakeup` applies to the generated bindings.
+
+The harness sends absolute-form HTTP request targets because Wasmtime 49's
+CLI strips `Host` from incoming headers without copying it into the WASI
+request authority for origin-form requests. Absolute-form targets preserve
+that authority for the component's Host guard, including disallowed-host tests.
+
+The outbound bridge retains each request's transmission handle until its
+response body has been drained. Dropping it early can cancel host I/O on
+Wasmtime 49 and return an incomplete body. The concurrency check covers 32
+parallel outbound calls and verifies the fixture body in every response.
+
 ## Configuration
 
 | Env var | Default | Purpose |
