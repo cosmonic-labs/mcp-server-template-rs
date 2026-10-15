@@ -76,12 +76,12 @@ tracing-subscriber = { version = "0.3", default-features = false, features = [
 # reported to the host via the wasi:otel@0.2.0-rc.2 interfaces and join the
 # host's traces. Requires a host that implements wasi:otel (wasmCloud v2 /
 # Cosmonic Control); plain `wasmtime serve` does not.
-opentelemetry = { version = "0.31", optional = true }
-opentelemetry_sdk = { version = "0.31", default-features = false, features = [
+opentelemetry = { version = "0.33", optional = true }
+opentelemetry_sdk = { version = "0.33", default-features = false, features = [
     "trace",
 ], optional = true }
 opentelemetry-wasi = { git = "https://github.com/bytecodealliance/opentelemetry-wasi", rev = "2962a286aa66", optional = true }
-tracing-opentelemetry = { version = "0.32", default-features = false, optional = true }
+tracing-opentelemetry = { version = "0.34", default-features = false, optional = true }
 
 [features]
 default = []
