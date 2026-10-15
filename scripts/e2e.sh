@@ -124,19 +124,28 @@ done
 echo "== protocol =="
 
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | mcp_post)
-assert_contains "initialize negotiates 2026-07-28" '"protocolVersion":"2026-07-28"' "$OUT"
+assert_contains "initialize stays on the latest legacy revision" '"protocolVersion":"2025-11-25"' "$OUT"
 
-HDRS=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | mcp_post -i -o /dev/null -D - 2>/dev/null || true)
 HDRS=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" -H "$PV" -D - -o /dev/null --data-binary @-)
 assert_contains "initialize streams as SSE" 'text/event-stream' "$HDRS"
 
-OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"old","version":"0"}}}' | mcp_post)
-assert_contains "older protocol client still served (statelessly)" '"jsonrpc":"2.0"' "$OUT"
+OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"old","version":"0"}}}' \
+  | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" \
+      -H 'MCP-Protocol-Version: 2025-03-26' --data-binary @-)
+assert_contains "older initialize revision is preserved" '"protocolVersion":"2025-03-26"' "$OUT"
+
+OUT=$(printf '%s' '{"jsonrpc":"2.0","id":2,"method":"resources/list","params":{}}' \
+  | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" \
+      -H 'MCP-Protocol-Version: 2025-11-25' --data-binary @-)
+assert_contains "legacy resource request works without inline metadata" 'skill://index.json' "$OUT"
+assert_not_contains "legacy resources omit modern cache hints" '"ttlMs"' "$OUT"
+assert_not_contains "legacy resources omit resultType" '"resultType"' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: tools/list')
 for TOOL in add current_time echo http_get; do
   assert_contains "tools/list contains $TOOL" "\"name\":\"$TOOL\"" "$OUT"
 done
+assert_contains "tools/list carries a safe default cache lifetime" '"ttlMs":0' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"message\":\"e2e says hi\"},$META}}" | mcp_post -H 'Mcp-Method: tools/call' -H 'Mcp-Name: echo')
 assert_contains "echo round-trips" 'e2e says hi' "$OUT"
@@ -184,7 +193,7 @@ fi
 # transport on / and on the canonical /mcp path.
 OUT=$(printf '%s' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"e2e","version":"0"}}}' \
   | curl -sS --max-time 20 -X POST "http://127.0.0.1:${PORT}/mcp" -H "$CT" -H "$ACCEPT" -H "$PV" --data-binary @-)
-assert_contains "POST /mcp serves the protocol" '"protocolVersion":"2026-07-28"' "$OUT"
+assert_contains "POST /mcp serves the legacy handshake" '"protocolVersion":"2025-11-25"' "$OUT"
 
 echo "== skills over MCP (io.modelcontextprotocol/skills) =="
 
@@ -199,6 +208,15 @@ assert_contains "instructions name the skill index resource" 'skill://index.json
 # The stateless 2026-07-28 handshake serves the same declaration.
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"server/discover\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: server/discover')
 assert_contains "server/discover declares the skills extension" '"io.modelcontextprotocol/skills":{"directoryRead":true}' "$OUT"
+assert_contains "server/discover advertises supported versions" '"supportedVersions":[' "$OUT"
+assert_contains "server/discover supports the modern protocol" '2026-07-28' "$OUT"
+assert_contains "server/discover includes server identity metadata" '"io.modelcontextprotocol/serverInfo"' "$OUT"
+
+OUT=$(printf '%s' '{"jsonrpc":"2.0","id":2,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2099-01-01","io.modelcontextprotocol/clientCapabilities":{}}}}' \
+  | curl -sS --max-time 20 -X POST "$BASE" -H "$CT" -H "$ACCEPT" \
+      -H 'MCP-Protocol-Version: 2099-01-01' -H 'Mcp-Method: server/discover' --data-binary @-)
+assert_contains "unsupported discovery version is rejected" '"code":-32022' "$OUT"
+assert_contains "unsupported discovery version reports supported revisions" '"supported":[' "$OUT"
 
 # skills/list — every skill as a complete entry: verbatim frontmatter plus a
 # manifest with a SHA-256 digest and byte size per file.
@@ -267,11 +285,15 @@ assert_contains "directory read of a file is -32602" '-32602' "$OUT"
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"resources/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/list')
 assert_contains "resources/list contains the skill catalog" 'skill://index.json' "$OUT"
 assert_contains "resources/list contains the server SKILL.md" 'skill://mcp-server-template/SKILL.md' "$OUT"
+assert_contains "resource catalog is fresh for one hour" '"ttlMs":3600000' "$OUT"
+assert_contains "resource catalog is public" '"cacheScope":"public"' "$OUT"
 # The manifest enumerates the supporting files; the resource list does not.
 assert_not_contains "resources/list does not list the supporting files" 'skill://mcp-server-template/references/TOOLS.md' "$OUT"
 
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"resources/templates/list\",\"params\":{$META}}" | mcp_post -H 'Mcp-Method: resources/templates/list')
 assert_contains "resources/templates/list exposes the skill URI template" 'skill://{skill}/SKILL.md' "$OUT"
+assert_contains "resource templates are fresh for one hour" '"ttlMs":3600000' "$OUT"
+assert_contains "resource templates are public" '"cacheScope":"public"' "$OUT"
 
 # skill://index.json — the catalog as a resource, a mirror of skills/list for
 # a client that reads resources but has no skills/list.
@@ -285,6 +307,8 @@ OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"resources/read\",
   | mcp_post -H 'Mcp-Method: resources/read' -H 'Mcp-Name: skill://mcp-server-template/SKILL.md')
 assert_contains "SKILL.md is served as markdown" '"mimeType":"text/markdown"' "$OUT"
 assert_contains "SKILL.md body is the playbook" 'Using the mcp-server-template MCP server' "$OUT"
+assert_contains "embedded resource read is fresh for one hour" '"ttlMs":3600000' "$OUT"
+assert_contains "embedded resource read is public" '"cacheScope":"public"' "$OUT"
 
 # Relative links inside a SKILL.md resolve against the skill root.
 OUT=$(printf '%s' "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"resources/read\",\"params\":{\"uri\":\"skill://mcp-server-template/references/TOOLS.md\",$META}}" \

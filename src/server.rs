@@ -14,10 +14,10 @@
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{
-    CallToolResult, ContentBlock, CustomRequest, CustomResult, ErrorCode, ExtensionCapabilities,
-    Implementation, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
-    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, ResourceContents,
-    ServerCapabilities, ServerInfo,
+    CacheScope, CallToolResult, ContentBlock, CustomRequest, CustomResult, ErrorCode,
+    ExtensionCapabilities, Implementation, ListResourceTemplatesResult, ListResourcesResult,
+    PaginatedRequestParams, ProtocolVersion, ReadResourceRequestParams, ReadResourceResponse,
+    ReadResourceResult, ResourceContents, ServerCapabilities, ServerConfig,
 };
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_handler, tool_router, ErrorData, ServerHandler};
@@ -58,6 +58,9 @@ pub struct HttpGetParams {
 
 /// Response bodies larger than this are truncated in `http_get` output.
 const HTTP_GET_BODY_LIMIT: usize = 4096;
+
+// Embedded skill content is identical for every caller.
+const SKILL_CACHE_TTL_MS: u64 = 60 * 60 * 1000;
 
 #[tool_router]
 impl TemplateServer {
@@ -225,13 +228,13 @@ fn deny_private_target(uri: &http::Uri) -> Option<String> {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for TemplateServer {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // Skills over MCP: the extension is declared beside `resources`, which
         // it rides on — a server declaring it MUST declare both. `server/discover`
         // (the stateless 2026-07-28 handshake) serves these same capabilities.
         let mut extensions = ExtensionCapabilities::new();
         extensions.insert(skills::EXTENSION_ID.to_string(), skills::capability());
-        ServerInfo::new(
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_extensions_with(extensions)
                 .enable_tools()
@@ -269,7 +272,6 @@ impl ServerHandler for TemplateServer {
         request: CustomRequest,
         _context: RequestContext<RoleServer>,
     ) -> Result<CustomResult, ErrorData> {
-        const TTL_MS: u64 = 60 * 60 * 1000;
         let CustomRequest { method, params, .. } = request;
         let uri = || {
             params
@@ -288,7 +290,7 @@ impl ServerHandler for TemplateServer {
             skills::LIST_METHOD => serde_json::json!({
                 "resultType": "complete",
                 "skills": skills::entries(),
-                "ttlMs": TTL_MS,
+                "ttlMs": SKILL_CACHE_TTL_MS,
                 "cacheScope": "public",
             }),
             skills::GET_METHOD => {
@@ -299,7 +301,7 @@ impl ServerHandler for TemplateServer {
                 serde_json::json!({
                     "resultType": "complete",
                     "skill": entry,
-                    "ttlMs": TTL_MS,
+                    "ttlMs": SKILL_CACHE_TTL_MS,
                     "cacheScope": "public",
                 })
             }
@@ -334,9 +336,15 @@ impl ServerHandler for TemplateServer {
     async fn list_resources(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(ListResourcesResult::with_all_items(skills::resources()))
+        let mut result = ListResourcesResult::with_all_items(skills::resources());
+        if supports_cache_hints(&context) {
+            result = result
+                .with_ttl_ms(SKILL_CACHE_TTL_MS)
+                .with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
     }
 
     /// Parameterized `skill://` URIs, so a client can construct a skill
@@ -344,18 +352,22 @@ impl ServerHandler for TemplateServer {
     async fn list_resource_templates(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ListResourceTemplatesResult, ErrorData> {
-        Ok(ListResourceTemplatesResult::with_all_items(
-            skills::resource_templates(),
-        ))
+        let mut result = ListResourceTemplatesResult::with_all_items(skills::resource_templates());
+        if supports_cache_hints(&context) {
+            result = result
+                .with_ttl_ms(SKILL_CACHE_TTL_MS)
+                .with_cache_scope(CacheScope::Public);
+        }
+        Ok(result)
     }
 
-    #[tracing::instrument(name = "resources.read", skip(self, _context), fields(uri = %request.uri))]
+    #[tracing::instrument(name = "resources.read", skip(self, context), fields(uri = %request.uri))]
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let (mime_type, text) = skills::read(&request.uri).ok_or_else(|| {
             // -32002 to a handshake peer; the SDK upgrades it to -32602 for a
@@ -370,9 +382,20 @@ impl ServerHandler for TemplateServer {
                 None,
             )
         })?;
-        Ok(ReadResourceResult::new(vec![
+        let mut result = ReadResourceResult::new(vec![
             ResourceContents::text(text, request.uri).with_mime_type(mime_type)
-        ])
-        .into())
+        ]);
+        if supports_cache_hints(&context) {
+            result = result
+                .with_ttl_ms(SKILL_CACHE_TTL_MS)
+                .with_cache_scope(CacheScope::Public);
+        }
+        Ok(result.into())
     }
+}
+
+fn supports_cache_hints(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .protocol_version()
+        .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
 }

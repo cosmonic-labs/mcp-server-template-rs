@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 [dependencies]
 # Official Model Context Protocol SDK. The streamable-http-server transport is
 # pure `http`/`http-body` types (no hyper/axum), so it compiles to wasm32-wasip2.
-rmcp = { version = "3.1.1", default-features = false, features = [
+rmcp = { version = "3.5.1", default-features = false, features = [
     "server",
     "macros",
     "schemars",

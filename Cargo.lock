@@ -851,9 +851,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rmcp"
-version = "3.1.1"
+version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "094c075f6698deef5a657cf4df6b684dff65157d255978b92b552ec22503f17a"
+checksum = "ab5023804cbe0304cbe06197ac16e645a0a0d0ffa2953bf735c15c2fa0213350"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -863,6 +863,7 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
+ "indexmap",
  "pastey",
  "pin-project-lite",
  "rand 0.10.2",
@@ -882,9 +883,9 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "3.1.1"
+version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "737d947bcfd946fae6a179a4ef6487be6dcf25c930c2393856b820f1386e52a6"
+checksum = "a1da498700030856ba63114bceefa30ba21f5e278cb975e5b9de3529fe842b40"
 dependencies = [
  "darling",
  "proc-macro2",

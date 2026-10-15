@@ -108,17 +108,25 @@ manifest documents what each label means. Keep them accurate when you fork.
 
 ### Talk to it
 
-Initialize (on Cosmonic Desktop the ingress routes by Host header):
+Discover the server (on Cosmonic Desktop the ingress routes by Host header):
 
 ```console
 $ curl -X POST http://mcp-server.localhost:8200/ \
     -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' \
     -H 'MCP-Protocol-Version: 2026-07-28' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
+    -H 'Mcp-Method: server/discover' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-Every request after `initialize` follows the 2026-07-28 stateless
+The server defaults to MCP 2026-07-28, which uses `server/discover` instead of
+an initialization handshake.
+Its response lists `supportedVersions`, capabilities, and instructions, with
+server identity in `_meta["io.modelcontextprotocol/serverInfo"]`. Legacy
+clients can still use `initialize`; it negotiates at most `2025-11-25`, the
+last revision with that handshake.
+
+Every modern request follows the 2026-07-28 stateless
 conventions: an `Mcp-Method` routing header (plus `Mcp-Name` for tool calls),
 and a per-request `_meta` in params carrying **both**
 `io.modelcontextprotocol/protocolVersion` and
@@ -225,6 +233,12 @@ skill, or supporting files to this one, edit the `SKILLS` table in
 from the `SKILL.md` YAML block, so there is one place to edit it, and the
 extension requires its `name` to equal the last segment of the skill's URI path
 (which the package name satisfies).
+
+For MCP 2026-07-28 clients, embedded skill listings, URI templates, and file
+reads carry `ttlMs: 3600000` and `cacheScope: "public"`, matching `skills/list`
+and `skills/get`. Clients may cache them for one hour across callers because
+the content is compiled in. If you add caller-specific or dynamic resources,
+adjust their cache lifetime and scope. Tool results remain uncached.
 
 `skills/building-mcp-servers/` is **not** served: it is guidance for the coding
 agent building a server from this template, not for the server's clients.

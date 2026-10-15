@@ -5,7 +5,7 @@ description: Build, test, and deploy an MCP server as a WebAssembly component on
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 7 (updated after: Skills over MCP is mandatory; default route on GET /)
+Version: 8
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -306,11 +306,12 @@ curl -sS -X POST -H 'Host: <name>.localhost' http://127.0.0.1:8200/ \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -H 'MCP-Protocol-Version: 2026-07-28' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2026-07-28","capabilities":{},"clientInfo":{"name":"check","version":"0"}}}'
+  -H 'Mcp-Method: server/discover' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
 ```
 
-Must return `data: {...  "protocolVersion":"2026-07-28" ...}`. Then exercise
-one real tool call the same way (add `Mcp-Method: tools/call`,
+Must return a complete result whose `supportedVersions` includes `2026-07-28`.
+Then exercise one real tool call the same way (add `Mcp-Method: tools/call`,
 `Mcp-Name: <tool>`, and `"_meta":{"io.modelcontextprotocol/protocolVersion":
 "2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}` in params).
 
@@ -339,12 +340,15 @@ the server.
 
 ## Pitfalls (living list — add what bites you)
 
-- **rmcp 3.x API**: it's `ContentBlock` (not `Content`); `ServerInfo`/
+- **rmcp 3.x API**: it's `ContentBlock` (not `Content`); `ServerConfig`/
   `Implementation`/`CallToolResult` are `#[non_exhaustive]` — use
-  constructors/builders (`ServerInfo::new(..).with_server_info(..)
+  constructors/builders (`ServerConfig::new(..).with_server_info(..)
   .with_instructions(..)`). `#[tool_handler]` defaults to `Self::tool_router()`
   (rebuild per call); pass `#[tool_handler(router = self.tool_router)]` to
   use the field.
+- **Protocol lifecycle**: use `server/discover` for MCP 2026-07-28. Legacy
+  `initialize` negotiates at most `2025-11-25`. `ServerInfo` is deprecated;
+  return `ServerConfig` from `get_info`.
 - **Never `String::truncate` at a byte offset** on upstream/user content —
   panics mid-UTF-8-char, and panic=abort kills the whole instance. Use the
   template's `truncation_boundary`.
