@@ -62,7 +62,7 @@ pub fn document(tools: &[String]) -> String {
         },
         "protocol": {
             "name": "Model Context Protocol",
-            "specVersion": rmcp::model::ProtocolVersion::V_2026_07_28.as_str(),
+            "specVersion": rmcp::model::ProtocolVersion::LATEST.as_str(),
             "transport": "streamable-http",
             "stateless": true,
         },
