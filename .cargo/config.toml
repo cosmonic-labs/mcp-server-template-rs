@@ -1,10 +1,7 @@
-# Default to building a WebAssembly component. The wasm32-wasip2 target emits
-# a component directly (via wasm-component-ld); the wasi:http@0.3.0 handler
-# export makes it a WASI p3 async component.
+# Build a native WASI p3 component, including the Rust standard library.
 [build]
-target = "wasm32-wasip2"
+target = "wasm32-wasip3"
 
-# tokio's wasm32-wasip2 support (including tokio::net) is gated behind the
-# tokio_unstable cfg until stabilized.
-[target.wasm32-wasip2]
+# Enable Tokio's unstable WASI support.
+[target.wasm32-wasip3]
 rustflags = ["--cfg", "tokio_unstable"]

@@ -10,6 +10,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  WASMTIME_VERSION: 49.0.3
+  WASM_TOOLS_VERSION: 1.262.0
 
 jobs:
   build:
@@ -18,11 +20,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          toolchain: stable
-          components: clippy, rustfmt
-          targets: wasm32-wasip2
+      - name: Install Rust toolchain
+        run: rustup show
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Format
@@ -37,16 +36,18 @@ jobs:
       - name: Check wasi-otel feature
         run: cargo check --release --features wasi-otel
 
-      - name: Verify wasi:http@0.3.0 handler export
+      - name: Verify native WASI p3 component
         run: |
-          cargo install wasm-tools --locked
-          wasm-tools component wit target/wasm32-wasip2/release/mcp_server_template.wasm | tee /tmp/world.wit
+          cargo install wasm-tools --version "$WASM_TOOLS_VERSION" --locked
+          wasm-tools component wit target/wasm32-wasip3/release/mcp_server_template.wasm | tee /tmp/world.wit
           grep -q 'export wasi:http/handler@0.3.0' /tmp/world.wit
+          if grep -Eq 'import wasi:.*@0\.2\.' /tmp/world.wit; then
+            echo 'Unexpected WASI p2 import in the native p3 component'
+            exit 1
+          fi
 
       - name: End-to-end protocol suite
         run: |
-          curl -sSfL https://github.com/bytecodealliance/wasmtime/releases/download/v46.0.1/wasmtime-v46.0.1-x86_64-linux.tar.xz | tar -xJ
-          echo "$PWD/wasmtime-v46.0.1-x86_64-linux" >> "$GITHUB_PATH"
-          export PATH="$PWD/wasmtime-v46.0.1-x86_64-linux:$PATH"
-          cargo install wasm-tools --locked || true
+          curl -sSfL "https://github.com/bytecodealliance/wasmtime/releases/download/v${WASMTIME_VERSION}/wasmtime-v${WASMTIME_VERSION}-x86_64-linux.tar.xz" | tar -xJ
+          export PATH="$PWD/wasmtime-v${WASMTIME_VERSION}-x86_64-linux:$PATH"
           scripts/e2e.sh --no-build

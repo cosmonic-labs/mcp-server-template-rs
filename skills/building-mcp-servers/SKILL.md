@@ -5,7 +5,7 @@ description: Build, test, and deploy an MCP server as a WebAssembly component on
 
 # Building MCP servers with mcp-server-template-rs
 
-Version: 8
+Version: 9
 
 This skill turns a tool idea into a deployed, spec-compliant MCP server
 component. Follow the phases in order; the Pitfalls section at the end is a
@@ -33,7 +33,8 @@ They all source the shared test harness `scripts/mcp_e2e_lib.sh`.
    The template's transport config already enforces this — do not change
    `legacy_session_mode`, the session manager, or protocol pinning.
 2. **Target**: the component must export `wasi:http/handler@0.3.0` (WASI p3),
-   built on `wasm32-wasip2` with the template's `.cargo/config.toml` intact.
+   built on `wasm32-wasip3` with the template's `.cargo/config.toml` and
+   `rust-toolchain.toml` intact. The standard library must also use p3.
 3. **Cosmonic Desktop compatibility**: deploys as a Workload with the
    `interfaces: ["handler"]` hostInterface (p3 name — NOT `incoming-handler`),
    `mcp.ai/*` labels, `MCP_ALLOWED_HOSTS` matching the ingress host, and
@@ -58,7 +59,8 @@ Copy the template (do not `git clone` into the new project):
 ```bash
 SRC=<path-to-mcp-server-template-rs>
 mkdir -p <project> && cd <project>
-cp -R $SRC/.cargo $SRC/.wash $SRC/src $SRC/scripts $SRC/deploy $SRC/Cargo.toml \
+cp -R $SRC/.cargo $SRC/.wash $SRC/compat $SRC/src $SRC/scripts $SRC/deploy $SRC/Cargo.toml \
+      $SRC/rust-toolchain.toml \
       $SRC/Cargo.lock $SRC/workload.yaml $SRC/.gitignore .
 # The served skill — `src/skills.rs` include_str!s these, so the build breaks
 # without them:
@@ -73,7 +75,7 @@ name stays `server`; the skill's URI name is the **package name**, so
 
 Then rename everywhere, keeping the names aligned:
 - `Cargo.toml` `[package] name` (kebab-case, e.g. `sec-edgar-mcp`)
-- `.wash/config.yaml` `build.component_path` → `target/wasm32-wasip2/release/<name_with_underscores>.wasm`
+- `.wash/config.yaml` `build.component_path` → `target/wasm32-wasip3/release/<name_with_underscores>.wasm`
 - `scripts/e2e.sh` `WASM=` path (ports are already `${PORT:-8199}`-style
   overridable — still pick unique defaults if suites may run concurrently)
 - `workload.yaml` AND `deploy/workload.yaml`: `metadata.name`, hostInterface
@@ -121,12 +123,11 @@ let response = crate::bridge::outbound::fetch(request).await; // deadline + size
   HTTP MUST add this to `Cargo.toml` (the template already does):
   ```toml
   wit-bindgen = { version = "0.62.0", default-features = false,
-      features = ["async", "async-spawn", "inter-task-wakeup"] }
+      features = ["std", "async", "async-spawn", "inter-task-wakeup"] }
   ```
   Keep this version equal to the one `wasip3` depends on (`wasip3` 0.9.0 uses
-  0.62.0) so Cargo builds a single runtime. Never pair `inter-task-wakeup` with
-  wit-bindgen 0.58 or older: wasmtime 48 traps those components with
-  "waitable cannot be used synchronously while added to a waitable set".
+  0.62.0) so Cargo builds a single runtime. Keep `std` enabled for native p3
+  task-local storage; the no-std runtime traps under concurrent invocation.
   Without it, concurrent invocations on one reused instance **trap** ("Rust
   task cannot sleep waiting only on Rust-originating events") the moment a task
   parks on a Rust-only event (the bridge's request lock / outbound oneshot).
@@ -221,7 +222,7 @@ finished the server.
 
 ```bash
 cargo fmt && cargo clippy --all-features -- -D warnings && cargo build --release
-wasm-tools component wit target/wasm32-wasip2/release/<name>.wasm | grep 'export wasi:http/handler@0.3.0'
+wasm-tools component wit target/wasm32-wasip3/release/<name>.wasm | grep 'export wasi:http/handler@0.3.0'
 ```
 
 `cargo test` does NOT work here (build target is wasm) — `scripts/e2e.sh` is
@@ -404,7 +405,7 @@ the server.
 
 ### Numeric-trap discipline (pure-compute tools) — from after-effects-mcp
 
-On `wasm32-wasip2` with `panic=abort`, ANY panic aborts the whole instance —
+On `wasm32-wasip3` with `panic=abort`, ANY panic aborts the whole instance —
 a remotely-triggerable DoS. Release builds do NOT set `overflow-checks`, so
 integer overflow *wraps silently* (a correctness bug), but a few operations
 panic unconditionally regardless. For every tool doing arithmetic on
